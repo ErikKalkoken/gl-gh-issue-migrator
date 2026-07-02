@@ -4,7 +4,7 @@ import os
 import random
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Set
 
 import gitlab
 import requests
@@ -158,17 +158,18 @@ class Migrator:
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
-        gl_labels: List[str] = [LABEL_MIGRATED]
+        gl_labels: Set[str] = {LABEL_MIGRATED}
         issues = self.gl_project.issues.list(iterator=True)
         for issue in issues:
             for label in issue.labels:
-                gl_labels.append(label)
+                gl_labels.add(label)
 
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
         has_missing = False
         for label in gl_labels:
             if label in gh_labels:
                 continue
+
             has_missing = True
             if not self.is_dry_run:
                 self.gh_repo.create_label(
@@ -353,10 +354,11 @@ def main():
         required=True,
         help="Name of the GitLab project, e.g. ErikKalkoken/aa-structures",
     )
+    gitlab_token = os.environ.get("GITLAB_TOKEN")
     parser.add_argument(
         "--gitlab-token",
-        default=os.environ.get("GITLAB_TOKEN"),
-        required=True,
+        default=gitlab_token,
+        required=not gitlab_token,
         help=(
             "Personal access token for GitLab. "
             "Can also be set via environment variable: GITLAB_TOKEN"
@@ -367,19 +369,21 @@ def main():
         required=True,
         help="Name of the GitHub repository, e.g. ErikKalkoken/aa-structures",
     )
+    github_token = os.environ.get("GITHUB_TOKEN")
     parser.add_argument(
         "--github-token",
-        default=os.environ.get("GITHUB_TOKEN"),
-        required=True,
+        default=github_token,
+        required=not github_token,
         help=(
             "Personal access token for GitHub. "
             "Can also be set via environment variable: GITHUB_TOKEN"
         ),
     )
+    imgpile_api_key = os.environ.get("IMGPILE_API_KEY")
     parser.add_argument(
         "--imgpile-api-key",
-        required=True,
-        default=os.environ.get("IMGPILE_API_KEY"),
+        default=imgpile_api_key,
+        required=not imgpile_api_key,
         help=(
             "API key for uploads to imgpile. "
             "Can also be set via environment variable: IMGPILE_API_KEY"
@@ -404,7 +408,10 @@ def main():
         logger.error("Migration error: " + ex.message)
         exit(1)
 
-    logger.info("Migration completed!")
+    if m.is_dry_run:
+        logger.info("Dry Run completed!")
+    else:
+        logger.info("Migration completed!")
 
 
 if __name__ == "__main__":
