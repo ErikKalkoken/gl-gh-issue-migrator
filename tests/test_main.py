@@ -12,7 +12,7 @@ class TestMigrator_MigrateTextImages(unittest.TestCase):
     def test_can_replace_urls(self):
         # given
         m = Migrator(
-            gitlab_project="",
+            gitlab_repo="",
             gitlab_token="",
             github_repo="",
             github_token="",
@@ -39,7 +39,7 @@ class TestMigrator_MigrateTextImages(unittest.TestCase):
     def test_can_pass_through_text_without_images(self):
         # given
         m = Migrator(
-            gitlab_project="",
+            gitlab_repo="",
             gitlab_token="",
             github_repo="",
             github_token="",

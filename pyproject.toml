@@ -18,3 +18,6 @@ Home = "https://gitlab.com/ErikKalkoken/aa-issue-migrator"
 
 [tool.flit.module]
 name = "issue_migrator"
+
+[project.scripts]
+issue-migrator = "issue_migrator.main:main_cli"

@@ -14,6 +14,8 @@ from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project
 
+from . import __doc__ as package_doc
+
 logging.basicConfig(
     format="{asctime} {levelname} {message}",
     style="{",
@@ -97,14 +99,14 @@ class MigrationError(Exception):
 class Migrator:
     def __init__(
         self,
-        gitlab_project: str,
+        gitlab_repo: str,
         gitlab_token: str,
         github_repo: str,
         github_token: str,
         imgpile_api_key: str,
         is_dry_run: bool = True,
     ):
-        self._gitlab_project = gitlab_project
+        self._gitlab_project = gitlab_repo
         self._gitlab_token = gitlab_token
         self._github_repo = github_repo
         self._github_token = github_token
@@ -229,7 +231,7 @@ class Migrator:
             orig_labels = ", ".join(sorted(gl_issue.labels))
             description_2 = self._migrate_text_images(gl_issue.description)
             issue_body = (
-                f"> 🚚 **Migrated from GitLab**\n"
+                f"> 📦 **Migrated from GitLab**\n"
                 f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
                 f"> **Author:** {author}\n"
                 f"> **Created At:** {gl_issue.created_at}\n"
@@ -256,7 +258,7 @@ class Migrator:
                 comment_url: str = f"{gl_issue.web_url}#note_{gl_note.id}"
                 description_2 = self._migrate_text_images(gl_note.body)
                 formatted_comment = (
-                    f"> 🚚 **Migrated Comment** "
+                    f"> 📦 **Migrated Comment** "
                     f"| **Author:** {author} "
                     f"| **Date:** {gl_note.created_at} "
                     f"| [Link]({comment_url}) \n\n"
@@ -264,6 +266,17 @@ class Migrator:
                 )
                 if not self.is_dry_run:
                     gh_issue.create_comment(body=formatted_comment)
+
+            if not self.is_dry_run:
+                migration_note = (
+                    "📦 **Issue Transferred**\n\n"
+                    "This issue has been moved to a new repository: "
+                    f"[GitHub Issue #{gh_issue.number}]({gh_issue.html_url})\n\n"
+                    "We are closing this thread to keep the discussion centralized."
+                )
+                gl_issue.notes.create({"body": migration_note})
+                gl_issue.state_event = "close"
+                gl_issue.save()
 
             done_count += 1
             logger.info(
@@ -405,16 +418,16 @@ def _remove_image_sizes(markdown_text: str) -> str:
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=package_doc)
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Run through the migration without creating any objects on GitHub.",
     )
     parser.add_argument(
-        "--gitlab-project",
+        "--gitlab-repo",
         required=True,
-        help="Name of the GitLab project, e.g. ErikKalkoken/aa-structures",
+        help="Name of the GitLab repository, e.g. ErikKalkoken/aa-structures",
     )
     gitlab_token = os.environ.get("GITLAB_TOKEN")
     parser.add_argument(
@@ -455,10 +468,10 @@ def _parse_args():
     return args
 
 
-def main():
+def main_cli():
     args = _parse_args()
     m = Migrator(
-        gitlab_project=args.gitlab_project,
+        gitlab_repo=args.gitlab_repo,
         gitlab_token=args.gitlab_token,
         github_repo=args.github_repo,
         github_token=args.github_token,
@@ -480,4 +493,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main_cli()
