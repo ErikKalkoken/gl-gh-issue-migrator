@@ -12,6 +12,8 @@ dependencies = [
     "python-gitlab","PyGithub"
 ]
 
+[project.optional-dependencies]
+test = ["pook"]
 
 [project.urls]
 Home = "https://gitlab.com/ErikKalkoken/aa-issue-migrator"

@@ -1,9 +1,14 @@
 import unittest
 from unittest import mock
 
+import pook
 from gitlab.v4.objects import Project
 
-from issue_migrator.main import Migrator, _remove_image_sizes
+from issue_migrator.main import (
+    Migrator,
+    _download_image_from_gitlab,
+    _remove_image_sizes,
+)
 
 MODULE_PATH = "issue_migrator.main"
 
@@ -127,3 +132,55 @@ class TestRemoveImageSizes(unittest.TestCase):
     def test_empty_string(self):
         """Test that an empty string returns an empty string without raising an exception."""
         self.assertEqual(_remove_image_sizes(""), "")
+
+
+class TestDownloadImageFromGitLab(unittest.TestCase):
+
+    def setUp(self):
+        # Mocking the gitlab.Gitlab client object
+        self.mock_gl = mock.MagicMock()
+        self.mock_gl.url = "https://gitlab.example.com"
+        self.mock_gl.private_token = "fake-token-123"
+
+        # Mocking the gitlab Project object
+        self.mock_project = mock.MagicMock()
+        self.mock_project.encoded_id = "my-group%2Fmy-project"
+
+        self.rel_url = "images/avatar.png"
+        # The expected generated URL inside the function
+        self.expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
+
+    @pook.on
+    def test_download_image_success(self):
+        """Test successful image download."""
+        fake_binary_data = b"fake-jpeg-bytes"
+
+        (
+            pook.get(self.expected_url)
+            .reply(200)
+            .header("Content-Type", "image/jpeg")
+            # No Content-Disposition header provided
+            .body(fake_binary_data)
+        )
+
+        result = _download_image_from_gitlab(
+            self.mock_gl, self.mock_project, self.rel_url
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        # Should fall back to the end of the URL path ("avatar.png")
+        self.assertEqual(result.filename, "avatar.png")
+        self.assertEqual(result.content_type, "image/jpeg")
+
+    @pook.on
+    def test_download_image_failure(self):
+        """Test that the function returns None and logs error when GitLab returns non-200."""
+        (pook.get(self.expected_url).reply(404).body("Not Found"))
+
+        result = _download_image_from_gitlab(
+            self.mock_gl, self.mock_project, self.rel_url
+        )
+
+        # Assert that it gracefully handled the failure and returned None
+        self.assertIsNone(result)

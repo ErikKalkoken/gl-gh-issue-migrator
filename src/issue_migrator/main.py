@@ -1,18 +1,22 @@
+"""Main logic."""
+
 import argparse
 import logging
 import os
 import random
 import re
+import sys
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import List, Optional
 
 import gitlab
 import requests
 from github import Auth, Github
 from github.GithubException import BadCredentialsException, UnknownObjectException
+from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
-from gitlab.v4.objects import Project
+from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 
 from . import __doc__ as package_doc
 
@@ -27,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 LABEL_MIGRATED = "source: gitlab"
 GITLAB_URL = "https://gitlab.com"
+REQUEST_TIMEOUT = 5  # seconds
 
 GITHUB_LABEL_COLORS = [  # spell-checker: disable
     # Reds & Pinks
@@ -93,10 +98,23 @@ IMG_REGEX = r"!\[.*?\]\(((?:/uploads/|\.\./uploads/)[^\)]+)\)"
 
 @dataclass
 class MigrationError(Exception):
+    """A migration error."""
+
     message: str
 
 
+@dataclass
+class DownloadedImage:
+    """An image downloaded from GitLab."""
+
+    bytes_data: bytes
+    content_type: str
+    filename: str
+
+
 class Migrator:
+    """The issue migrator."""
+
     def __init__(
         self,
         gitlab_repo: str,
@@ -159,8 +177,8 @@ class Migrator:
 
         try:
             auth = Auth.Token(self._github_token)
-            self.gh = Github(auth=auth)
-            self._gh_repo = self.gh.get_repo(self._github_repo)
+            gh = Github(auth=auth)
+            self._gh_repo = gh.get_repo(self._github_repo)
 
         except BadCredentialsException as ex:
             raise MigrationError(f"GitHub token invalid: {ex}") from ex
@@ -178,12 +196,7 @@ class Migrator:
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
-        gl_labels: Set[str] = set()
-        issues = self.gl_project.issues.list(iterator=True)
-        for issue in issues:
-            for label in issue.labels:
-                gl_labels.add(label)
-
+        gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
 
         if LABEL_MIGRATED not in gh_labels:
@@ -193,9 +206,9 @@ class Migrator:
                     random.choice(GITHUB_LABEL_COLORS),
                     description="This issue was migrated from GitLab",
                 )
-                logger.info("Created missing label: %s", label)
+                logger.info("Created missing label: %s", LABEL_MIGRATED)
             else:
-                logger.info("Label missing: %s", label)
+                logger.info("Label missing: %s", LABEL_MIGRATED)
 
         has_missing = False
         for label in gl_labels:
@@ -227,56 +240,13 @@ class Migrator:
         logger.info("Found %d opened issue to migrate", issues.total)
         done_count = 0
         for gl_issue in issues:
-            author = gl_issue.author.get("name") or "?"
-            orig_labels = ", ".join(sorted(gl_issue.labels))
-            description_2 = self._migrate_text_images(gl_issue.description)
-            issue_body = (
-                f"> 📦 **Migrated from GitLab**\n"
-                f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
-                f"> **Author:** {author}\n"
-                f"> **Created At:** {gl_issue.created_at}\n"
-                f"> **State at Migration:** {gl_issue.state}\n"
-                f"> **Labels:** {orig_labels}\n\n"
-                f"---\n\n"
-                f"{description_2}"
-            )
-            if not self.is_dry_run:
-                gh_issue = self.gh_repo.create_issue(
-                    title=gl_issue.title, body=issue_body
+            try:
+                self._migrate_issue(gl_issue)
+            except Exception as ex:
+                logger.error(
+                    "Failed to migrate issue #%s: %s", gl_issue.iid, ex, exc_info=True
                 )
-
-                gh_issue.add_to_labels(LABEL_MIGRATED)
-                for label in gl_issue.labels:
-                    gh_issue.add_to_labels(label)
-
-            notes = gl_issue.notes.list(iterator=True, sort="asc")
-            for gl_note in notes:
-                if gl_note.system:
-                    continue
-
-                author = gl_note.author.get("name") or "?"
-                comment_url: str = f"{gl_issue.web_url}#note_{gl_note.id}"
-                description_2 = self._migrate_text_images(gl_note.body)
-                formatted_comment = (
-                    f"> 📦 **Migrated Comment** "
-                    f"| **Author:** {author} "
-                    f"| **Date:** {gl_note.created_at} "
-                    f"| [Link]({comment_url}) \n\n"
-                    f"{description_2}"
-                )
-                if not self.is_dry_run:
-                    gh_issue.create_comment(body=formatted_comment)
-
-            if not self.is_dry_run:
-                migration_note = (
-                    "📦 **Issue Transferred**\n\n"
-                    "This issue has been moved to a new repository: "
-                    f"[GitHub Issue #{gh_issue.number}]({gh_issue.html_url})\n\n"
-                    "We are closing this thread to keep the discussion centralized."
-                )
-                gl_issue.notes.create({"body": migration_note})
-                gl_issue.state_event = "close"
-                gl_issue.save()
+                continue
 
             done_count += 1
             logger.info(
@@ -286,6 +256,77 @@ class Migrator:
                 done_count,
                 issues.total,
             )
+
+    def _migrate_issue(self, gl_issue: ProjectIssue):
+        author = gl_issue.author.get("name") or "?"
+        orig_labels = ", ".join(sorted(gl_issue.labels))
+        description_2 = self._migrate_text_images(gl_issue.description)
+        issue_body = (
+            f"> 📦 **Migrated from GitLab**\n"
+            f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
+            f"> **Author:** {author}\n"
+            f"> **Created At:** {gl_issue.created_at}\n"
+            f"> **State at Migration:** {gl_issue.state}\n"
+            f"> **Labels:** {orig_labels}\n\n"
+            f"---\n\n"
+            f"{description_2}"
+        )
+        if not self.is_dry_run:
+            gh_issue = self.gh_repo.create_issue(title=gl_issue.title, body=issue_body)
+
+            gh_issue.add_to_labels(LABEL_MIGRATED)
+            for label in gl_issue.labels:
+                gh_issue.add_to_labels(label)
+
+        else:
+            gh_issue = None
+
+        notes = gl_issue.notes.list(iterator=True, sort="asc")
+        for gl_note in notes:
+            if gl_note.system:
+                continue
+
+            try:
+                self._migrate_note(gl_issue, gh_issue, gl_note)
+            except Exception as ex:
+                logger.error(
+                    "Failed to migrate note #%s for issue #%s: %s",
+                    gl_note.get_id(),
+                    gl_issue.get_id(),
+                    ex,
+                    exc_info=True,
+                )
+                continue
+
+        if gh_issue:
+            migration_note = (
+                "📦 **Issue Transferred**\n\n"
+                "This issue has been moved to a new repository: "
+                f"[GitHub Issue #{gh_issue.number}]({gh_issue.html_url})\n\n"
+                "We are closing this thread to keep the discussion centralized."
+            )
+            gl_issue.notes.create({"body": migration_note})
+            gl_issue.state_event = "close"
+            gl_issue.save()
+
+    def _migrate_note(
+        self,
+        gl_issue: ProjectIssue,
+        gh_issue: Optional[Issue],
+        gl_note: ProjectIssueNote,
+    ):
+        author = gl_note.author.get("name") or "?"
+        comment_url: str = f"{gl_issue.web_url}#note_{gl_note.id}"
+        description_2 = self._migrate_text_images(gl_note.body)
+        formatted_comment = (
+            f"> 📦 **Migrated Comment** "
+            f"| **Author:** {author} "
+            f"| **Date:** {gl_note.created_at} "
+            f"| [Link]({comment_url}) \n\n"
+            f"{description_2}"
+        )
+        if gh_issue:
+            gh_issue.create_comment(body=formatted_comment)
 
     def _migrate_text_images(self, text: str) -> str:
         """Return a new text version where all private URLs for images
@@ -316,7 +357,7 @@ class Migrator:
 
 def _download_image_from_gitlab(
     gl: gitlab.Gitlab, gl_project: Project, rel_url: str
-) -> bytes:
+) -> Optional[DownloadedImage]:
     """Download an image file from GitLab and return it.
 
     Return empty when there was an error.
@@ -324,23 +365,31 @@ def _download_image_from_gitlab(
     gl_img_url = f"{gl.url}/-/project/{gl_project.encoded_id}/{rel_url.lstrip('.')}"
     filename = rel_url.split("/")[-1]
     headers = {"PRIVATE-TOKEN": gl.private_token}
-    response = requests.get(gl_img_url, headers=headers)  # type: ignore
+    response = requests.get(gl_img_url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
 
     if not response.ok:
         logger.error(
-            "Failed to download image %s from GitLab: %d %s %s",
+            "Failed to download image %s from GitLab: %s %d %s",
             filename,
             gl_img_url,
             response.status_code,
             response.text,
         )
-        return bytes()
+        return None
 
-    logger.info("Downloaded image from GitLab: %s", filename)
-    return response.content
+    img_bytes = response.content
+    mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+    image = DownloadedImage(
+        filename=filename, content_type=mime_type, bytes_data=img_bytes
+    )
+
+    logger.info("Downloaded image from GitLab: %s", image.filename)
+    return image
 
 
-def _upload_image_to_imgpile(image_bytes: bytes, filename: str, api_key: str) -> str:
+def _upload_image_to_imgpile(
+    image: DownloadedImage, filename: str, api_key: str
+) -> str:
     """Upload image to Imgpile and return it's direct URL.
 
     Return empty when there was an error.
@@ -350,8 +399,8 @@ def _upload_image_to_imgpile(image_bytes: bytes, filename: str, api_key: str) ->
     headers = {"Authorization": f"Bearer {api_key}"}
 
     # Using a tuple to pass raw bytes directly
-    files = {"file": (filename, image_bytes, "image/jpeg")}
-    response = requests.post(url, headers=headers, files=files)
+    files = {"file": (image.filename, image.bytes_data, image.content_type)}
+    response = requests.post(url, headers=headers, files=files, timeout=REQUEST_TIMEOUT)
     if not response.ok:
         logger.error(
             "imgpile upload failed for %s: %s %s",
@@ -469,6 +518,7 @@ def _parse_args():
 
 
 def main_cli():
+    """Main program for running this script."""
     args = _parse_args()
     m = Migrator(
         gitlab_repo=args.gitlab_repo,
@@ -483,8 +533,8 @@ def main_cli():
         m.connect()
         m.run()
     except MigrationError as ex:
-        logger.critical("Migration error: " + ex.message)
-        exit(1)
+        logger.critical("Migration error: %s", ex.message)
+        sys.exit(1)
 
     if m.is_dry_run:
         logger.info("Dry Run completed!")
