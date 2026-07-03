@@ -9,12 +9,24 @@ from typing import List, Optional, Set
 import gitlab
 import requests
 from github import Auth, Github
+from github.GithubException import BadCredentialsException, UnknownObjectException
 from github.Repository import Repository
+from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project
 
-LABEL_MIGRATED = "source: gitlab"
+logging.basicConfig(
+    format="{asctime} {levelname} {message}",
+    style="{",
+    datefmt="%Y/%m/%d %H:%M",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-GITHUB_LABEL_COLORS = [
+
+LABEL_MIGRATED = "source: gitlab"
+GITLAB_URL = "https://gitlab.com"
+
+GITHUB_LABEL_COLORS = [  # spell-checker: disable
     # Reds & Pinks
     "ff4444",
     "cf222e",
@@ -73,14 +85,6 @@ GITHUB_LABEL_COLORS = [
 ]
 
 
-logging.basicConfig(
-    format="{asctime} {levelname} {message}",
-    style="{",
-    datefmt="%Y/%m/%d %H:%M",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
-
 # Regex to find GitLab uploaded images
 IMG_REGEX = r"!\[.*?\]\(((?:/uploads/|\.\./uploads/)[^\)]+)\)"
 
@@ -135,19 +139,33 @@ class Migrator:
         return self._imgpile_api_key
 
     def connect(self):
-        self._gl = gitlab.Gitlab(
-            url="https://gitlab.com", private_token=self._gitlab_token
-        )
-        self._gl_project = self.gl.projects.get(self._gitlab_project)
+        self._gl = gitlab.Gitlab(url=GITLAB_URL, private_token=self._gitlab_token)
+        try:
+            self._gl_project = self.gl.projects.get(self._gitlab_project)
+        except GitlabAuthenticationError as ex:
+            raise MigrationError(message=f"GitLab token not valid: {ex}") from ex
+        except GitlabGetError as ex:
+            raise MigrationError(
+                message=f"GitLab project not found: {self._gitlab_project}"
+            ) from ex
+
         logger.info(
             "Connected to GitLab project: %s (ID: %s)",
             self.gl_project.name_with_namespace,
             self.gl_project.id,
         )
 
-        auth = Auth.Token(self._github_token)
-        self.gh = Github(auth=auth)
-        self._gh_repo = self.gh.get_repo(self._github_repo)
+        try:
+            auth = Auth.Token(self._github_token)
+            self.gh = Github(auth=auth)
+            self._gh_repo = self.gh.get_repo(self._github_repo)
+
+        except BadCredentialsException as ex:
+            raise MigrationError(f"GitHub token invalid: {ex}") from ex
+
+        except UnknownObjectException as ex:
+            raise MigrationError(f"GitHub repo not found: {self._github_repo}") from ex
+
         logger.info(
             "Connected to GitHub repo: %s (ID: %d", self.gh_repo.name, self.gh_repo.id
         )
@@ -158,13 +176,25 @@ class Migrator:
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
-        gl_labels: Set[str] = {LABEL_MIGRATED}
+        gl_labels: Set[str] = set()
         issues = self.gl_project.issues.list(iterator=True)
         for issue in issues:
             for label in issue.labels:
                 gl_labels.add(label)
 
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
+
+        if LABEL_MIGRATED not in gh_labels:
+            if not self.is_dry_run:
+                self.gh_repo.create_label(
+                    LABEL_MIGRATED,
+                    random.choice(GITHUB_LABEL_COLORS),
+                    description="This issue was migrated from GitLab",
+                )
+                logger.info("Created missing label: %s", label)
+            else:
+                logger.info("Label missing: %s", label)
+
         has_missing = False
         for label in gl_labels:
             if label in gh_labels:
@@ -175,14 +205,17 @@ class Migrator:
                 self.gh_repo.create_label(
                     label,
                     random.choice(GITHUB_LABEL_COLORS),
-                    description="Migrated from GitLab",
+                    description="This label was migrated from GitLab",
                 )
                 logger.info("Created missing label: %s", label)
+            else:
+                logger.info("Label missing: %s", label)
 
         if not has_missing:
             logger.info("Labels are in sync")
 
     def _migrate_issues(self):
+        """Migrate all issues of a project."""
         issues = self.gl_project.issues.list(
             state="opened",
             order_by="created_at",
@@ -194,6 +227,7 @@ class Migrator:
         for gl_issue in issues:
             author = gl_issue.author.get("name") or "?"
             orig_labels = ", ".join(sorted(gl_issue.labels))
+            description_2 = self._migrate_text_images(gl_issue.description)
             issue_body = (
                 f"> 🚚 **Migrated from GitLab**\n"
                 f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
@@ -202,8 +236,7 @@ class Migrator:
                 f"> **State at Migration:** {gl_issue.state}\n"
                 f"> **Labels:** {orig_labels}\n\n"
                 f"---\n\n"
-                f"### Original Description\n"
-                f"{gl_issue.description}"
+                f"{description_2}"
             )
             if not self.is_dry_run:
                 gh_issue = self.gh_repo.create_issue(
@@ -221,13 +254,13 @@ class Migrator:
 
                 author = gl_note.author.get("name") or "?"
                 comment_url: str = f"{gl_issue.web_url}#note_{gl_note.id}"
-                body_2 = self._migrate_text_images(gl_note.body)
+                description_2 = self._migrate_text_images(gl_note.body)
                 formatted_comment = (
                     f"> 🚚 **Migrated Comment** "
                     f"| **Author:** {author} "
                     f"| **Date:** {gl_note.created_at} "
                     f"| [Link]({comment_url}) \n\n"
-                    f"{body_2}"
+                    f"{description_2}"
                 )
                 if not self.is_dry_run:
                     gh_issue.create_comment(body=formatted_comment)
@@ -241,7 +274,10 @@ class Migrator:
                 issues.total,
             )
 
-    def _migrate_text_images(self, text: str):
+    def _migrate_text_images(self, text: str) -> str:
+        """Return a new text version where all private URLs for images
+        have been replaced with public URLs. Also removes size artifacts.
+        """
         if not text:
             return text
 
@@ -259,18 +295,19 @@ class Migrator:
             if not new_image_url:
                 continue
 
-            # Replace the relative GitLab link with the permanent imgBB URL
+            # Replace the relative GitLab link with the permanent repository URL
             text = text.replace(rel_url, new_image_url)
 
-        return text
+        return _remove_image_sizes(text)
 
 
 def _download_image_from_gitlab(
     gl: gitlab.Gitlab, gl_project: Project, rel_url: str
 ) -> bytes:
-    # gl_img_url = f"{gl.url}/{gl_project.path_with_namespace}{rel_url.lstrip('.')}"
-    # https://gitlab.com/-/project/83987261/uploads/bc9742193bd73dd1b45aa5619e5fab4c/cheese_cake.webp
-    # https://gitlab.com/ErikKalkoken/alpha-dummy/uploads/bc9742193bd73dd1b45aa5619e5fab4c/cheese_cake.webp
+    """Download an image file from GitLab and return it.
+
+    Return empty when there was an error.
+    """
     gl_img_url = f"{gl.url}/-/project/{gl_project.encoded_id}/{rel_url.lstrip('.')}"
     filename = rel_url.split("/")[-1]
     headers = {"PRIVATE-TOKEN": gl.private_token}
@@ -291,7 +328,10 @@ def _download_image_from_gitlab(
 
 
 def _upload_image_to_imgpile(image_bytes: bytes, filename: str, api_key: str) -> str:
-    """Uploads image to Imgpile and return URL."""
+    """Upload image to Imgpile and return it's direct URL.
+
+    Return empty when there was an error.
+    """
     url = "https://cdn.imgpile.com/api/v1/media"
 
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -318,6 +358,28 @@ def _upload_image_to_imgpile(image_bytes: bytes, filename: str, api_key: str) ->
     return url_2
 
 
+def _remove_image_sizes(markdown_text: str) -> str:
+    """
+    Removes optional size parameters like {width=900 height=491} from markdown image links
+    while leaving code blocks (and any image-like syntax inside them) completely untouched.
+    """
+    # Pattern matches either:
+    # Group 1: A markdown code block (``` ... ```)
+    # Group 2: A standard markdown image reference (![...](...))
+    # Group 3: Optional trailing size parameters wrapped in curly braces ({...})
+    pattern = r"(```[\s\S]*?```)|(!\[.*?\]\(.*?\))\s*(\{[^}]*\})"
+
+    def replacer(match):
+        # If Group 1 matches, it means we are inside a code block. Return it exactly as is.
+        if match.group(1):
+            return match.group(1)
+
+        # If Group 2 matches, return just the image markdown, discarding the curly braces (Group 3).
+        return match.group(2)
+
+    return re.sub(pattern, replacer, markdown_text)
+
+
 # def _upload_image_to_ibb(image_bytes: bytes, filename: str, api_key: str) -> str:
 #     """Uploads binary image data to imgBB and returns the direct image URL.
 
@@ -342,7 +404,7 @@ def _upload_image_to_imgpile(image_bytes: bytes, filename: str, api_key: str) ->
 #     return url
 
 
-def main():
+def _parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dry-run",
@@ -390,7 +452,11 @@ def main():
         ),
     )
     args = parser.parse_args()
+    return args
 
+
+def main():
+    args = _parse_args()
     m = Migrator(
         gitlab_project=args.gitlab_project,
         gitlab_token=args.gitlab_token,
@@ -400,12 +466,11 @@ def main():
         is_dry_run=args.dry_run,
     )
 
-    m.connect()
-
     try:
+        m.connect()
         m.run()
     except MigrationError as ex:
-        logger.error("Migration error: " + ex.message)
+        logger.critical("Migration error: " + ex.message)
         exit(1)
 
     if m.is_dry_run:
