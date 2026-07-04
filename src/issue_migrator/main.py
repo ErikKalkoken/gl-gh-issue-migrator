@@ -6,6 +6,7 @@ import os
 import random
 import re
 import sys
+import time
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -124,7 +125,7 @@ class Migrator:
         self.github_repo = github_repo
         self.github_token = github_token
         self.is_dry_run = is_dry_run
-        self._imgpile_api_key = imgpile_api_key
+        self.imgpile_api_key = imgpile_api_key
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
         self._gh_repo: Optional[Repository] = None
@@ -146,12 +147,6 @@ class Migrator:
         if self._gh_repo is None:
             raise RuntimeError("Not yet configured")
         return self._gh_repo
-
-    @property
-    def imgpile_api_key(self) -> str:
-        if self._imgpile_api_key is None:
-            raise RuntimeError("Not yet configured")
-        return self._imgpile_api_key
 
     def connect(self):
         self._gl = gitlab.Gitlab(url=self.gitlab_host, private_token=self.gitlab_token)
@@ -360,6 +355,7 @@ def _download_image_from_gitlab(
     gl_img_url = f"{gl.url}/-/project/{gl_project.encoded_id}/{rel_url.lstrip('.')}"
     filename = rel_url.split("/")[-1]
     headers = {"PRIVATE-TOKEN": gl.private_token}
+    time.sleep(0.2)  # rate limit is 500 / minute
     response = requests.get(gl_img_url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
     logger.debug(
         "GitLab image download: GET %s %d %s",
@@ -398,6 +394,7 @@ def _upload_image_to_imgpile(
 
     # Using a tuple to pass raw bytes directly
     files = {"file": (image.filename, image.data, image.content_type)}
+    time.sleep(0.5)  # rate limit is 120 / minute
     response = requests.post(url, headers=headers, files=files, timeout=REQUEST_TIMEOUT)
     logger.debug(
         "Image upload imgPile: POST %s %d %s %s",
@@ -545,14 +542,12 @@ def main_cli():
 
     level_mapping = logging.getLevelNamesMapping()
     target_level = level_mapping.get(args.log_level.upper(), logging.INFO)
-    logger.setLevel(target_level)
-    logger.propagate = False
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        fmt="{asctime} {levelname} {message}", style="{", datefmt="%Y/%m/%d %H:%M"
+    logging.basicConfig(
+        format="{asctime} {levelname} {message}",
+        style="{",
+        datefmt="%Y/%m/%d %H:%M",
+        level=target_level,
     )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
 
     m = Migrator(
         gitlab_host=args.gitlab_host,
