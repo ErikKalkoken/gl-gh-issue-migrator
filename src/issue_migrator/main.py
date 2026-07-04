@@ -20,14 +20,7 @@ from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 
 from . import __doc__ as package_doc
 
-logging.basicConfig(
-    format="{asctime} {levelname} {message}",
-    style="{",
-    datefmt="%Y/%m/%d %H:%M",
-    level=logging.INFO,
-)
 logger = logging.getLogger(__name__)
-
 
 LABEL_MIGRATED = "source: gitlab"
 GITLAB_URL = "https://gitlab.com"
@@ -366,7 +359,12 @@ def _download_image_from_gitlab(
     filename = rel_url.split("/")[-1]
     headers = {"PRIVATE-TOKEN": gl.private_token}
     response = requests.get(gl_img_url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
-
+    logger.debug(
+        "GitLab image download: GET %s %d %s",
+        gl_img_url,
+        response.status_code,
+        response.headers,
+    )
     if not response.ok:
         logger.error(
             "Failed to download image %s from GitLab: %s %d %s",
@@ -401,6 +399,13 @@ def _upload_image_to_imgpile(
     # Using a tuple to pass raw bytes directly
     files = {"file": (image.filename, image.bytes_data, image.content_type)}
     response = requests.post(url, headers=headers, files=files, timeout=REQUEST_TIMEOUT)
+    logger.debug(
+        "Image upload imgPile: POST %s %d %s %s",
+        url,
+        response.status_code,
+        response.text,
+        response.headers,
+    )
     if not response.ok:
         logger.error(
             "imgpile upload failed for %s: %s %s",
@@ -467,7 +472,9 @@ def _remove_image_sizes(markdown_text: str) -> str:
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description=package_doc)
+    parser = argparse.ArgumentParser(
+        description=package_doc, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -513,6 +520,12 @@ def _parse_args():
             "Can also be set via environment variable: IMGPILE_API_KEY"
         ),
     )
+    parser.add_argument(
+        "--log-level",
+        choices=logging.getLevelNamesMapping().keys(),
+        default="INFO",
+        help=("Set log level"),
+    )
     args = parser.parse_args()
     return args
 
@@ -520,6 +533,18 @@ def _parse_args():
 def main_cli():
     """Main program for running this script."""
     args = _parse_args()
+
+    level_mapping = logging.getLevelNamesMapping()
+    target_level = level_mapping.get(args.log_level.upper(), logging.INFO)
+    logger.setLevel(target_level)
+    logger.propagate = False
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        fmt="{asctime} {levelname} {message}", style="{", datefmt="%Y/%m/%d %H:%M"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
     m = Migrator(
         gitlab_repo=args.gitlab_repo,
         gitlab_token=args.gitlab_token,
