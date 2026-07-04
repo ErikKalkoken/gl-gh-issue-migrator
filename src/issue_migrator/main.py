@@ -22,6 +22,7 @@ from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 
 from . import __doc__ as package_doc
+from . import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +470,7 @@ def _parse_args():
     parser = argparse.ArgumentParser(
         description=package_doc, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    parser.add_argument("-v", "--version", action="version", version=__version__)
     gitlab_host = os.environ.get("GITLAB_HOST")
     parser.add_argument(
         "--gitlab-host",
