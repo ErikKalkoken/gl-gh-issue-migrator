@@ -7,6 +7,7 @@ import pook
 from gitlab.v4.objects import Project
 
 from issue_migrator.main import (
+    GITLAB_PUBLIC_HOST,
     REQUEST_TIMEOUT,
     Migrator,
     _download_embedded_file_from_gitlab,
@@ -15,6 +16,23 @@ from issue_migrator.main import (
 )
 
 MODULE_PATH = "issue_migrator.main"
+
+
+def create_migrator(**kwargs):
+    """Return a new migrator with preset values."""
+    params = {
+        "close_issues": False,
+        "github_repo": "ErikKalkoken/github-repo",
+        "github_token": "github_token",
+        "gitlab_host": GITLAB_PUBLIC_HOST,
+        "gitlab_repo": "ErikKalkoken/gitlab-repo",
+        "gitlab_token": "gitlab_token",
+        "is_dry_run": False,
+        "vercel_blob_token": "vercel_blob_token",
+    }
+    params.update(kwargs)
+    m = Migrator(**params)
+    return m
 
 
 class TestRemoveImageSizes(unittest.TestCase):
@@ -241,14 +259,7 @@ class TestMigrator_MigrateEmbeddedFiles(unittest.TestCase):
                     download.return_value = "image".encode("utf-8")
                     upload.return_value = new_url
 
-                    m = Migrator(
-                        gitlab_host="gitlab_host",
-                        gitlab_repo="",
-                        gitlab_token="gitlab_token",
-                        github_repo="github_repo",
-                        github_token="",
-                        vercel_blob_token="xxx",
-                    )
+                    m = create_migrator()
                     m._gl_project = mock.MagicMock(spec=Project)
 
                     result = m._migrate_embedded_files(input_desc, "1")

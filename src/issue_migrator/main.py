@@ -106,13 +106,15 @@ class Migrator:
         github_repo: str,
         github_token: str,
         vercel_blob_token: str,
-        is_dry_run: bool = True,
+        is_dry_run: bool,
+        no_close_issues: bool,
     ):
+        self.no_close_issues = no_close_issues
+        self.github_repo = github_repo
+        self.github_token = github_token
         self.gitlab_host = gitlab_host
         self.gitlab_repo = gitlab_repo
         self.gitlab_token = gitlab_token
-        self.github_repo = github_repo
-        self.github_token = github_token
         self.is_dry_run = is_dry_run
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
@@ -284,7 +286,7 @@ class Migrator:
                 )
                 continue
 
-        if gh_issue:
+        if gh_issue and not self.no_close_issues:
             migration_note = (
                 "📦 **Issue Transferred**\n\n"
                 "This issue has been moved to a new repository: "
@@ -491,6 +493,11 @@ def _parse_args():
         help="Run through the migration without creating any objects on GitHub.",
     )
     parser.add_argument(
+        "--no-close-issues",
+        action="store_true",
+        help="Disables closing migrated issues.",
+    )
+    parser.add_argument(
         "--log-level",
         choices=logging.getLevelNamesMapping().keys(),
         default="INFO",
@@ -503,7 +510,6 @@ def _parse_args():
 def main_cli():
     """Main program for running this script."""
     args = _parse_args()
-
     level_mapping = logging.getLevelNamesMapping()
     target_level = level_mapping.get(args.log_level.upper(), logging.INFO)
     logging.basicConfig(
@@ -514,15 +520,15 @@ def main_cli():
     )
 
     m = Migrator(
+        no_close_issues=args.no_close_issues,
+        github_repo=args.github_repo,
+        github_token=args.github_token,
         gitlab_host=args.gitlab_host,
         gitlab_repo=args.gitlab_repo,
         gitlab_token=args.gitlab_token,
-        github_repo=args.github_repo,
-        github_token=args.github_token,
-        vercel_blob_token=args.vercel_blob_token,
         is_dry_run=args.dry_run,
+        vercel_blob_token=args.vercel_blob_token,
     )
-
     try:
         m.connect()
         m.run()
