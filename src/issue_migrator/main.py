@@ -23,7 +23,7 @@ from . import __doc__ as package_doc
 logger = logging.getLogger(__name__)
 
 LABEL_MIGRATED = "source: gitlab"
-GITLAB_URL = "https://gitlab.com"
+GITLAB_PUBLIC_HOST = "https://gitlab.com"
 REQUEST_TIMEOUT = 5  # seconds
 
 GITHUB_LABEL_COLORS = [  # spell-checker: disable
@@ -100,7 +100,7 @@ class MigrationError(Exception):
 class DownloadedImage:
     """An image downloaded from GitLab."""
 
-    bytes_data: bytes
+    data: bytes
     content_type: str
     filename: str
 
@@ -110,6 +110,7 @@ class Migrator:
 
     def __init__(
         self,
+        gitlab_host: str,
         gitlab_repo: str,
         gitlab_token: str,
         github_repo: str,
@@ -117,12 +118,13 @@ class Migrator:
         imgpile_api_key: str,
         is_dry_run: bool = True,
     ):
-        self._gitlab_project = gitlab_repo
-        self._gitlab_token = gitlab_token
-        self._github_repo = github_repo
-        self._github_token = github_token
-        self._imgpile_api_key = imgpile_api_key
+        self.gitlab_host = gitlab_host
+        self.gitlab_project = gitlab_repo
+        self.gitlab_token = gitlab_token
+        self.github_repo = github_repo
+        self.github_token = github_token
         self.is_dry_run = is_dry_run
+        self._imgpile_api_key = imgpile_api_key
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
         self._gh_repo: Optional[Repository] = None
@@ -152,14 +154,14 @@ class Migrator:
         return self._imgpile_api_key
 
     def connect(self):
-        self._gl = gitlab.Gitlab(url=GITLAB_URL, private_token=self._gitlab_token)
+        self._gl = gitlab.Gitlab(url=self.gitlab_host, private_token=self.gitlab_token)
         try:
-            self._gl_project = self.gl.projects.get(self._gitlab_project)
+            self._gl_project = self.gl.projects.get(self.gitlab_project)
         except GitlabAuthenticationError as ex:
             raise MigrationError(message=f"GitLab token not valid: {ex}") from ex
         except GitlabGetError as ex:
             raise MigrationError(
-                message=f"GitLab project not found: {self._gitlab_project}"
+                message=f"GitLab project not found: {self.gitlab_project}"
             ) from ex
 
         logger.info(
@@ -169,15 +171,15 @@ class Migrator:
         )
 
         try:
-            auth = Auth.Token(self._github_token)
+            auth = Auth.Token(self.github_token)
             gh = Github(auth=auth)
-            self._gh_repo = gh.get_repo(self._github_repo)
+            self._gh_repo = gh.get_repo(self.github_repo)
 
         except BadCredentialsException as ex:
             raise MigrationError(f"GitHub token invalid: {ex}") from ex
 
         except UnknownObjectException as ex:
-            raise MigrationError(f"GitHub repo not found: {self._github_repo}") from ex
+            raise MigrationError(f"GitHub repo not found: {self.github_repo}") from ex
 
         logger.info(
             "Connected to GitHub repo: %s (ID: %d", self.gh_repo.name, self.gh_repo.id
@@ -377,9 +379,7 @@ def _download_image_from_gitlab(
 
     img_bytes = response.content
     mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-    image = DownloadedImage(
-        filename=filename, content_type=mime_type, bytes_data=img_bytes
-    )
+    image = DownloadedImage(filename=filename, content_type=mime_type, data=img_bytes)
 
     logger.info("Downloaded image from GitLab: %s", image.filename)
     return image
@@ -397,7 +397,7 @@ def _upload_image_to_imgpile(
     headers = {"Authorization": f"Bearer {api_key}"}
 
     # Using a tuple to pass raw bytes directly
-    files = {"file": (image.filename, image.bytes_data, image.content_type)}
+    files = {"file": (image.filename, image.data, image.content_type)}
     response = requests.post(url, headers=headers, files=files, timeout=REQUEST_TIMEOUT)
     logger.debug(
         "Image upload imgPile: POST %s %d %s %s",
@@ -475,10 +475,14 @@ def _parse_args():
     parser = argparse.ArgumentParser(
         description=package_doc, formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
+    gitlab_host = os.environ.get("GITLAB_HOST")
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run through the migration without creating any objects on GitHub.",
+        "--gitlab-host",
+        default=gitlab_host or GITLAB_PUBLIC_HOST,
+        help=(
+            "URL of the GitLab host. "
+            "Can also be set via environment variable: GITLAB_HOST"
+        ),
     )
     parser.add_argument(
         "--gitlab-repo",
@@ -521,6 +525,11 @@ def _parse_args():
         ),
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run through the migration without creating any objects on GitHub.",
+    )
+    parser.add_argument(
         "--log-level",
         choices=logging.getLevelNamesMapping().keys(),
         default="INFO",
@@ -546,6 +555,7 @@ def main_cli():
     logger.addHandler(handler)
 
     m = Migrator(
+        gitlab_host=args.gitlab_host,
         gitlab_repo=args.gitlab_repo,
         gitlab_token=args.gitlab_token,
         github_repo=args.github_repo,
