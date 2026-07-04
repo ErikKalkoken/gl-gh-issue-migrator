@@ -10,6 +10,7 @@ from issue_migrator.main import (
     GITLAB_PUBLIC_HOST,
     REQUEST_TIMEOUT,
     Migrator,
+    _defang_gitlab_mentions,
     _download_embedded_file_from_gitlab,
     _remove_image_sizes,
     _upload_file_to_vercel,
@@ -264,3 +265,55 @@ class TestMigrator_MigrateEmbeddedFiles(unittest.TestCase):
 
                     result = m._migrate_embedded_files(input_desc, "1")
                     self.assertEqual(result, expected)
+
+
+class TestGitLabMentionSubstitutor(unittest.TestCase):
+
+    def test_emphasize_gitlab_mentions(self):
+        # Test table: (description, input_text, expected_output)
+        test_cases = [
+            (
+                "Standard mention",
+                "Hello @alice, welcome!",
+                "Hello @\u200balice, welcome!",
+            ),
+            (
+                "Multiple mentions",
+                "@alice and @bob should look at this.",
+                "@\u200balice and @\u200bbob should look at this.",
+            ),
+            (
+                "Mention inside inline code block",
+                "Run `git checkout @charlie` to see changes.",
+                "Run `git checkout @charlie` to see changes.",
+            ),
+            (
+                "Mention inside multi-line code block",
+                "```\n# Debugging\n@dan where is this error?\n```",
+                "```\n# Debugging\n@dan where is this error?\n```",
+            ),
+            (
+                "Mixed content with mentions inside and outside code blocks",
+                "Hey @elena, check this code:\n```\n@elena left this note\n```\nAlso pinging @frank.",
+                "Hey @\u200belena, check this code:\n```\n@elena left this note\n```\nAlso pinging @\u200bfrank.",
+            ),
+            (
+                "Ignore email addresses or false positives",
+                "Contact support@gitlab.com or visit @gitlab.",
+                "Contact support@gitlab.com or visit @\u200bgitlab.",
+            ),
+            (
+                "Mention with special characters allowed in usernames",
+                "Ping @user.name-123",
+                "Ping @\u200buser.name-123",
+            ),
+        ]
+
+        for description, input_text, expected in test_cases:
+            with self.subTest(msg=description):
+                actual = _defang_gitlab_mentions(input_text)
+                self.assertEqual(
+                    actual,
+                    expected,
+                    f"\nFailed on: '{description}'\nExpected: {expected}\nGot: {actual}",
+                )

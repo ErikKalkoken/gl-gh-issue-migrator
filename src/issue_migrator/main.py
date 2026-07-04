@@ -247,6 +247,7 @@ class Migrator:
         description_2 = self._migrate_embedded_files(
             gl_issue.description, str(gl_issue.encoded_id)
         )
+        description_2 = _defang_gitlab_mentions(description_2)
         issue_body = (
             f"> 📦 **Migrated from GitLab**\n"
             f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
@@ -308,6 +309,7 @@ class Migrator:
         description_2 = self._migrate_embedded_files(
             gl_note.body, str(gl_issue.encoded_id)
         )
+        description_2 = _defang_gitlab_mentions(description_2)
         formatted_comment = (
             f"> 📦 **Migrated Comment** "
             f"| **Author:** {author} "
@@ -432,6 +434,35 @@ def _remove_image_sizes(markdown_text: str) -> str:
         return match.group(2)
 
     return re.sub(pattern, replacer, markdown_text)
+
+
+def _defang_gitlab_mentions(text: str) -> str:
+    """Deactivate @user mentions in GitLab descriptions
+    and ignore any mentions found inside inline code, code blocks, or emails.
+    """
+    # 1. Matches multi-line code blocks
+    # 2. Matches inline code blocks
+    # 3. Matches @username (ignoring mid-word/email @ symbols)
+    pattern = r"(```[\s\S]*?```)|(`[^`\n]+?`)|(?<!\w)@([\w.-]+)"
+
+    def replace(match):
+        # If group 1 or group 2 matched, we are inside a code block. Return it as-is.
+        if match.group(1) or match.group(2):
+            return match.group(0)
+
+        # Group 3 matched the user mention
+        mention = "@\u200b" + match.group(3)
+
+        # Gitlab usernames cannot end in standard punctuation.
+        # If a trailing period/comma/exclamation was caught, separate it.
+        trailing_punctuation = ""
+        while mention and mention[-1] in ".,!?":
+            trailing_punctuation = mention[-1] + trailing_punctuation
+            mention = mention[:-1]
+
+        return f"{mention}{trailing_punctuation}"
+
+    return re.sub(pattern, replace, text)
 
 
 def _parse_args():
