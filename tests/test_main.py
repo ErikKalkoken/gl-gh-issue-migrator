@@ -1,69 +1,20 @@
 import unittest
+from pathlib import PurePath
+from typing import Any, Dict, NamedTuple
 from unittest import mock
 
 import pook
-from gitlab import Gitlab
 from gitlab.v4.objects import Project
 
 from issue_migrator.main import (
-    DownloadedImage,
+    REQUEST_TIMEOUT,
     Migrator,
-    _download_image_from_gitlab,
+    _download_embedded_file_from_gitlab,
     _remove_image_sizes,
+    _upload_file_to_vercel,
 )
 
 MODULE_PATH = "issue_migrator.main"
-
-
-class TestMigrator_MigrateTextImages(unittest.TestCase):
-    def test_can_replace_urls(self):
-        # given
-        m = Migrator(
-            gitlab_host="",
-            gitlab_repo="",
-            gitlab_token="",
-            github_repo="",
-            github_token="",
-            imgpile_api_key="xxx",
-        )
-        m._gl = mock.MagicMock(spec=Gitlab)
-        m._gl_project = mock.MagicMock(spec=Project)
-        text = (
-            "before ![image](/uploads/903830a404b9289da9a6d6d0335a107b/image.png) after"
-        )
-        new_url = "https://www.new-url.com"
-        want = f"before ![image]({new_url}) after"
-        # when
-        with (
-            mock.patch(MODULE_PATH + "._download_image_from_gitlab") as download,
-            mock.patch(MODULE_PATH + "._upload_image_to_imgpile") as upload,
-        ):
-            download.return_value = DownloadedImage(
-                data="image".encode("utf-8"), content_type="xxx", filename="name"
-            )
-            upload.return_value = new_url
-            got = m._migrate_text_images(text)
-
-        # then
-        self.assertEqual(got, want)
-
-    def test_can_pass_through_text_without_images(self):
-        # given
-        m = Migrator(
-            gitlab_host="",
-            gitlab_repo="",
-            gitlab_token="",
-            github_repo="",
-            github_token="",
-            imgpile_api_key="xxx",
-        )
-        text = "dummy"
-
-        # when
-        got = m._migrate_text_images("dummy")
-
-        # then
-        self.assertEqual(got, text)
 
 
 class TestRemoveImageSizes(unittest.TestCase):
@@ -143,51 +94,162 @@ class TestRemoveImageSizes(unittest.TestCase):
 
 class TestDownloadImageFromGitLab(unittest.TestCase):
 
-    def setUp(self):
-        # Mocking the gitlab.Gitlab client object
-        self.mock_gl = mock.MagicMock()
-        self.mock_gl.url = "https://gitlab.example.com"
-        self.mock_gl.private_token = "fake-token-123"
-
-        # Mocking the gitlab Project object
-        self.mock_project = mock.MagicMock()
-        self.mock_project.encoded_id = "my-group%2Fmy-project"
-
-        self.rel_url = "images/avatar.png"
-        # The expected generated URL inside the function
-        self.expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
-
     @pook.on
     def test_download_image_success(self):
         """Test successful image download."""
+        host_url = "https://gitlab.example.com"
+        token = "fake-token-123"
+        encoded_id = "my-group%2Fmy-project"
+        rel_url = "images/avatar.png"
+        expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
         fake_binary_data = b"fake-jpeg-bytes"
-
         (
-            pook.get(self.expected_url)
+            pook.get(expected_url)
             .reply(200)
             .header("Content-Type", "image/jpeg")
             # No Content-Disposition header provided
             .body(fake_binary_data)
         )
 
-        result = _download_image_from_gitlab(
-            self.mock_gl, self.mock_project, self.rel_url
+        result = _download_embedded_file_from_gitlab(
+            host_url, encoded_id, rel_url, token
         )
 
-        self.assertIsNotNone(result)
-        assert result is not None
-        # Should fall back to the end of the URL path ("avatar.png")
-        self.assertEqual(result.filename, "avatar.png")
-        self.assertEqual(result.content_type, "image/jpeg")
+        self.assertEqual(result, fake_binary_data)
 
     @pook.on
     def test_download_image_failure(self):
         """Test that the function returns None and logs error when GitLab returns non-200."""
-        (pook.get(self.expected_url).reply(404).body("Not Found"))
+        host_url = "https://gitlab.example.com"
+        token = "fake-token-123"
+        encoded_id = "my-group%2Fmy-project"
+        rel_url = "images/avatar.png"
+        expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
 
-        result = _download_image_from_gitlab(
-            self.mock_gl, self.mock_project, self.rel_url
+        (pook.get(expected_url).reply(404).body("Not Found"))
+
+        result = _download_embedded_file_from_gitlab(
+            host_url, encoded_id, rel_url, token
         )
 
-        # Assert that it gracefully handled the failure and returned None
-        self.assertIsNone(result)
+        # Assert that it gracefully handled the failure and returned empty
+        self.assertFalse(result)
+
+
+class TestUploadFileToVercel(unittest.TestCase):
+    @mock.patch(MODULE_PATH + ".vercel_blob")
+    def test_upload_file_to_vercel_table(self, mock_vercel_blob):
+        class Case(NamedTuple):
+            name: str
+            path: PurePath
+            data: bytes
+            token: str
+            mock_response: Dict[str, Any]
+            expected_output: str
+
+        # Define the test table using the NamedTuple schema
+        test_table = [
+            Case(
+                name="Successful upload with valid URL",
+                path=PurePath("images/photo.png"),
+                data=b"fake_image_bytes",
+                token="verc_token_123",
+                mock_response={"url": "https://blob.vercel-storage.com/photo-abc.png"},
+                expected_output="https://blob.vercel-storage.com/photo-abc.png",
+            ),
+            Case(
+                name="Missing URL in response returns empty string",
+                path=PurePath("docs/readme.md"),
+                data=b"markdown_data",
+                token="verc_token_456",
+                mock_response={},
+                expected_output="",
+            ),
+            Case(
+                name="None URL value returns empty string",
+                path=PurePath("data.json"),
+                data=b"{}",
+                token="verc_token_789",
+                mock_response={"url": None},
+                expected_output="",
+            ),
+        ]
+
+        for case in test_table:
+            with self.subTest(name=case.name):
+                # Reset the mock for isolation between sub-tests
+                mock_vercel_blob.put.reset_mock()
+                mock_vercel_blob.put.return_value = case.mock_response
+
+                # Execute the function under test using dot notation from the NamedTuple
+                result = _upload_file_to_vercel(
+                    path=case.path, data=case.data, token=case.token
+                )
+
+                # Assert the return value matches expectation
+                self.assertEqual(result, case.expected_output)
+
+                # Verify that vercel_blob.put was called with the correct parameters
+                mock_vercel_blob.put.assert_called_once_with(
+                    path=str(case.path),
+                    data=case.data,
+                    timeout=REQUEST_TIMEOUT,
+                    options={"token": case.token, "addRandomSuffix": True},
+                )
+
+
+class TestMigrator_MigrateEmbeddedFiles(unittest.TestCase):
+
+    def test_replace_embedded_file_urls(self):
+        new_url = "https://cdn.example.com/new-link"
+        test_cases = [
+            (
+                "Replace upload link",
+                "Here is the [Specification](/uploads/abc/spec.pdf).",
+                f"Here is the [Specification]({new_url}).",
+            ),
+            (
+                "Ignore external file link",
+                "Download the doc from [Google Drive](https://drive.google.com/file.pdf).",
+                "Download the doc from [Google Drive](https://drive.google.com/file.pdf).",
+            ),
+            (
+                "Replace image upload",
+                "Check out the diagram: ![Arch Diagram](/uploads/xyz/arch.png){width=900 height=491}",
+                f"Check out the diagram: ![Arch Diagram]({new_url})",
+            ),
+            (
+                "Mixed GitLab uploads and external links",
+                "Get the [Local Report](/uploads/rep.docx) or the [External Doc](https://example.com/ext.docx).",
+                f"Get the [Local Report]({new_url}) or the [External Doc](https://example.com/ext.docx).",
+            ),
+            (
+                "No links present",
+                "Just plain text description with no attachments.",
+                "Just plain text description with no attachments.",
+            ),
+        ]
+
+        for name, input_desc, expected in test_cases:
+            with self.subTest(name=name):
+                with (
+                    mock.patch(
+                        MODULE_PATH + "._download_embedded_file_from_gitlab"
+                    ) as download,
+                    mock.patch(MODULE_PATH + "._upload_file_to_vercel") as upload,
+                ):
+                    download.return_value = "image".encode("utf-8")
+                    upload.return_value = new_url
+
+                    m = Migrator(
+                        gitlab_host="gitlab_host",
+                        gitlab_repo="",
+                        gitlab_token="gitlab_token",
+                        github_repo="github_repo",
+                        github_token="",
+                        vercel_blob_token="xxx",
+                    )
+                    m._gl_project = mock.MagicMock(spec=Project)
+
+                    result = m._migrate_embedded_files(input_desc, "1")
+                    self.assertEqual(result, expected)

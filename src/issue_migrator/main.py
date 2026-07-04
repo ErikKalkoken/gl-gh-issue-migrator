@@ -8,10 +8,12 @@ import re
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import List, Optional
 
 import gitlab
 import requests
+import vercel_blob
 from github import Auth, Github
 from github.GithubException import BadCredentialsException, UnknownObjectException
 from github.Issue import Issue
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 LABEL_MIGRATED = "source: gitlab"
 GITLAB_PUBLIC_HOST = "https://gitlab.com"
-REQUEST_TIMEOUT = 5  # seconds
+REQUEST_TIMEOUT = 10  # seconds
 
 GITHUB_LABEL_COLORS = [  # spell-checker: disable
     # Reds & Pinks
@@ -86,24 +88,11 @@ GITHUB_LABEL_COLORS = [  # spell-checker: disable
 ]
 
 
-# Regex to find GitLab uploaded images
-IMG_REGEX = r"!\[.*?\]\(((?:/uploads/|\.\./uploads/)[^\)]+)\)"
-
-
 @dataclass
 class MigrationError(Exception):
     """A migration error."""
 
     message: str
-
-
-@dataclass
-class DownloadedImage:
-    """An image downloaded from GitLab."""
-
-    data: bytes
-    content_type: str
-    filename: str
 
 
 class Migrator:
@@ -116,16 +105,16 @@ class Migrator:
         gitlab_token: str,
         github_repo: str,
         github_token: str,
-        imgpile_api_key: str,
+        vercel_blob_token: str,
         is_dry_run: bool = True,
     ):
         self.gitlab_host = gitlab_host
-        self.gitlab_project = gitlab_repo
+        self.gitlab_repo = gitlab_repo
         self.gitlab_token = gitlab_token
         self.github_repo = github_repo
         self.github_token = github_token
         self.is_dry_run = is_dry_run
-        self.imgpile_api_key = imgpile_api_key
+        self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
         self._gh_repo: Optional[Repository] = None
@@ -151,12 +140,12 @@ class Migrator:
     def connect(self):
         self._gl = gitlab.Gitlab(url=self.gitlab_host, private_token=self.gitlab_token)
         try:
-            self._gl_project = self.gl.projects.get(self.gitlab_project)
+            self._gl_project = self.gl.projects.get(self.gitlab_repo)
         except GitlabAuthenticationError as ex:
             raise MigrationError(message=f"GitLab token not valid: {ex}") from ex
         except GitlabGetError as ex:
             raise MigrationError(
-                message=f"GitLab project not found: {self.gitlab_project}"
+                message=f"GitLab project not found: {self.gitlab_repo}"
             ) from ex
 
         logger.info(
@@ -187,7 +176,10 @@ class Migrator:
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
         gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
+        logger.debug("GL labels: %s", ", ".join(sorted(gl_labels)))
+
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
+        logger.debug("GH labels: %s", ", ".join(sorted(gh_labels)))
 
         if LABEL_MIGRATED not in gh_labels:
             if not self.is_dry_run:
@@ -250,7 +242,9 @@ class Migrator:
     def _migrate_issue(self, gl_issue: ProjectIssue):
         author = gl_issue.author.get("name") or "?"
         orig_labels = ", ".join(sorted(gl_issue.labels))
-        description_2 = self._migrate_text_images(gl_issue.description)
+        description_2 = self._migrate_embedded_files(
+            gl_issue.description, str(gl_issue.encoded_id)
+        )
         issue_body = (
             f"> 📦 **Migrated from GitLab**\n"
             f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
@@ -261,6 +255,8 @@ class Migrator:
             f"---\n\n"
             f"{description_2}"
         )
+        logger.debug("Issue %s: %s", gl_issue.encoded_id, gl_issue.description)
+
         if not self.is_dry_run:
             gh_issue = self.gh_repo.create_issue(title=gl_issue.title, body=issue_body)
 
@@ -307,7 +303,9 @@ class Migrator:
     ):
         author = gl_note.author.get("name") or "?"
         comment_url: str = f"{gl_issue.web_url}#note_{gl_note.id}"
-        description_2 = self._migrate_text_images(gl_note.body)
+        description_2 = self._migrate_embedded_files(
+            gl_note.body, str(gl_issue.encoded_id)
+        )
         formatted_comment = (
             f"> 📦 **Migrated Comment** "
             f"| **Author:** {author} "
@@ -315,111 +313,101 @@ class Migrator:
             f"| [Link]({comment_url}) \n\n"
             f"{description_2}"
         )
+        logger.debug(
+            "Note %s-%s: %s", gl_issue.encoded_id, gl_note.id, gl_issue.description
+        )
         if gh_issue:
             gh_issue.create_comment(body=formatted_comment)
 
-    def _migrate_text_images(self, text: str) -> str:
-        """Return a new text version where all private URLs for images
-        have been replaced with public URLs. Also removes size artifacts.
+    def _migrate_embedded_files(self, text: str, issue_num: str) -> str:
+        """Return a new text version where all private URLs for embedded files
+        have been replaced with public URLs.
+        Also removes size artifacts after image links.
         """
         if not text:
             return text
 
-        matches: List[str] = re.findall(IMG_REGEX, text)
-        for rel_url in matches:
-            filename = rel_url.split("/")[-1]
+        pattern = r"!\[.*?\]\(((?:/uploads/|\.\./uploads/)[^\)]+)\)"
+        matches: List[str] = re.findall(pattern, text)
+        if matches:
+            for rel_url in matches:
+                text = self._migrate_embedded_file(text, issue_num, rel_url)
 
-            image = _download_image_from_gitlab(self.gl, self.gl_project, rel_url)
-            if not image:
-                continue
+            text = _remove_image_sizes(text)
 
-            new_image_url = _upload_image_to_imgpile(
-                image, filename, self.imgpile_api_key
-            )
-            if not new_image_url:
-                continue
+        pattern = r"(?<!!)\[[^\]]*\]\((/uploads/[^)]+)\)"
+        matches: List[str] = re.findall(pattern, text)
+        if matches:
+            for rel_url in matches:
+                text = self._migrate_embedded_file(text, issue_num, rel_url)
 
-            # Replace the relative GitLab link with the permanent repository URL
-            text = text.replace(rel_url, new_image_url)
+        return text
 
-        return _remove_image_sizes(text)
+    def _migrate_embedded_file(self, text: str, issue_num: str, rel_url: str):
+        filename = rel_url.split("/")[-1]
+
+        data = _download_embedded_file_from_gitlab(
+            self.gitlab_host,
+            str(self.gl_project.encoded_id),
+            rel_url,
+            self.gitlab_token,
+        )
+        if not data:
+            return text
+
+        path = PurePath(self.github_repo) / issue_num / filename
+        new_image_url = _upload_file_to_vercel(path, data, self.vercel_blob_token)
+        if not new_image_url:
+            return text
+
+        text = text.replace(rel_url, new_image_url)
+        return text
 
 
-def _download_image_from_gitlab(
-    gl: gitlab.Gitlab, gl_project: Project, rel_url: str
-) -> Optional[DownloadedImage]:
-    """Download an image file from GitLab and return it.
+def _download_embedded_file_from_gitlab(
+    host_url: str, project_id: str, rel_url: str, token: str
+) -> bytes:
+    """Download an embedded file from GitLab and return it.
 
     Return empty when there was an error.
     """
-    gl_img_url = f"{gl.url}/-/project/{gl_project.encoded_id}/{rel_url.lstrip('.')}"
+    url = f"{host_url}/-/project/{project_id}/{rel_url.lstrip('.')}"
     filename = rel_url.split("/")[-1]
-    headers = {"PRIVATE-TOKEN": gl.private_token}
+    headers = {"PRIVATE-TOKEN": token}
     time.sleep(0.2)  # rate limit is 500 / minute
-    response = requests.get(gl_img_url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
+    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
     logger.debug(
-        "GitLab image download: GET %s %d %s",
-        gl_img_url,
+        "GitLab file download: GET %s %d %s",
+        url,
         response.status_code,
         response.headers,
     )
     if not response.ok:
         logger.error(
-            "Failed to download image %s from GitLab: %s %d %s",
+            "Failed to download file %s from GitLab: %s %d %s",
             filename,
-            gl_img_url,
+            url,
             response.status_code,
             response.text,
         )
-        return None
+        return bytes()
 
-    img_bytes = response.content
+    image = response.content
     mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-    image = DownloadedImage(filename=filename, content_type=mime_type, data=img_bytes)
-
-    logger.info("Downloaded image from GitLab: %s", image.filename)
+    logger.info("Downloaded file from GitLab: %s %s", filename, mime_type)
     return image
 
 
-def _upload_image_to_imgpile(
-    image: DownloadedImage, filename: str, api_key: str
-) -> str:
-    """Upload image to Imgpile and return it's direct URL.
-
-    Return empty when there was an error.
-    """
-    url = "https://cdn.imgpile.com/api/v1/media"
-
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    # Using a tuple to pass raw bytes directly
-    files = {"file": (image.filename, image.data, image.content_type)}
-    time.sleep(0.5)  # rate limit is 120 / minute
-    response = requests.post(url, headers=headers, files=files, timeout=REQUEST_TIMEOUT)
-    logger.debug(
-        "Image upload imgPile: POST %s %d %s %s",
-        url,
-        response.status_code,
-        response.text,
-        response.headers,
+def _upload_file_to_vercel(path: PurePath, data: bytes, token: str) -> str:
+    options = {"token": token, "addRandomSuffix": True}
+    response = vercel_blob.put(
+        path=str(path), data=data, timeout=REQUEST_TIMEOUT, options=options
     )
-    if not response.ok:
-        logger.error(
-            "imgpile upload failed for %s: %s %s",
-            filename,
-            response.status_code,
-            response.text,
-        )
-        return ""
-
-    response_data = response.json()
-    logger.debug("response: %s", response_data)
-    media = response_data["media"]
-    filename_2 = media["filename"]
-    ext_2 = media["ext"]
-    url_2 = f"https://cdn.imgpile.com/f/{filename_2}_xl.{ext_2}"
-    logger.info("Uploaded image to imgpile: %s %s", filename, url_2)
-    return url_2
+    logger.debug("Vercel file upload: %s %s", path, response)
+    url = response.get("url") or ""
+    if url:
+        logger.info("Uploaded file to vercel: %s", url)
+    return url
 
 
 def _remove_image_sizes(markdown_text: str) -> str:
@@ -442,30 +430,6 @@ def _remove_image_sizes(markdown_text: str) -> str:
         return match.group(2)
 
     return re.sub(pattern, replacer, markdown_text)
-
-
-# def _upload_image_to_ibb(image_bytes: bytes, filename: str, api_key: str) -> str:
-#     """Uploads binary image data to imgBB and returns the direct image URL.
-
-#     Return URL of uploaded image on success or empty when upload failed..
-#     """
-#     url = "https://api.imgbb.com/1/upload"
-#     data = {"key": api_key, "name": filename}
-#     files = {"image": (filename, image_bytes)}
-#     response = requests.post(url, data=data, files=files)
-#     if not response.ok:
-#         logger.error(
-#             "imgBB upload failed for %s: %s %s",
-#             filename,
-#             response.status_code,
-#             response.text,
-#         )
-#         return ""
-
-#     res_json = response.json()
-#     url = res_json["data"]["url"]
-#     logger.info("Uploaded image to imgBB: %s", url)
-#     return url
 
 
 def _parse_args():
@@ -511,14 +475,14 @@ def _parse_args():
             "Can also be set via environment variable: GITHUB_TOKEN"
         ),
     )
-    imgpile_api_key = os.environ.get("IMGPILE_API_KEY")
+    vercel_token = os.environ.get("BLOB_READ_WRITE_TOKEN")
     parser.add_argument(
-        "--imgpile-api-key",
-        default=imgpile_api_key,
-        required=not imgpile_api_key,
+        "--vercel-blob-token",
+        default=vercel_token,
+        required=not vercel_token,
         help=(
-            "API key for uploads to imgpile. "
-            "Can also be set via environment variable: IMGPILE_API_KEY"
+            "Token for uploads to a vercel blop. "
+            "Can also be set via environment variable: BLOB_READ_WRITE_TOKEN"
         ),
     )
     parser.add_argument(
@@ -555,7 +519,7 @@ def main_cli():
         gitlab_token=args.gitlab_token,
         github_repo=args.github_repo,
         github_token=args.github_token,
-        imgpile_api_key=args.imgpile_api_key,
+        vercel_blob_token=args.vercel_blob_token,
         is_dry_run=args.dry_run,
     )
 

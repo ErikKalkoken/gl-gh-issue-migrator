@@ -11,7 +11,7 @@ A tool for migrating issues from a GitHub project to a GitLab repo.
 - Migrated issues are assigned a custom label so they can be identified later
 - Adds migration note in description with link to original issue
 - Adds migration note to comments with link to original issue
-- Embedded images are uploaded an external images store (i.e. imgpile)
+- Embedded images are uploaded an external object store (i.e. vercel)
 - Rate limits from both GH and GL are respected
 
 ## Planned
