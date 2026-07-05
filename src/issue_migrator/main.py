@@ -1,6 +1,5 @@
 """Main logic."""
 
-import argparse
 import logging
 import os
 import random
@@ -11,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import PurePath
 from typing import List, Optional
 
+import configargparse
 import gitlab
 import requests
 import vercel_blob
@@ -466,9 +466,10 @@ def _defang_gitlab_mentions(text: str) -> str:
     return re.sub(pattern, replace, text)
 
 
-def _parse_args():
-    parser = argparse.ArgumentParser(
-        description=package_doc, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+def _define_args() -> configargparse.ArgumentParser:
+    parser = configargparse.ArgumentParser(
+        description=package_doc,
+        formatter_class=configargparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("-v", "--version", action="version", version=__version__)
     gitlab_host = os.environ.get("GITLAB_HOST")
@@ -485,42 +486,31 @@ def _parse_args():
         required=True,
         help="Name of the GitLab repository, e.g. ErikKalkoken/aa-structures",
     )
-    gitlab_token = os.environ.get("GITLAB_TOKEN")
     parser.add_argument(
         "--gitlab-token",
-        default=gitlab_token,
-        required=not gitlab_token,
-        help=(
-            "Personal access token for GitLab. "
-            "Can also be set via environment variable: GITLAB_TOKEN"
-        ),
+        env_var="GITLAB_TOKEN",
+        required=True,
+        help="Personal access token for GitLab.",
     )
     parser.add_argument(
         "--github-repo",
         required=True,
         help="Name of the GitHub repository, e.g. ErikKalkoken/aa-structures",
     )
-    github_token = os.environ.get("GITHUB_TOKEN")
     parser.add_argument(
         "--github-token",
-        default=github_token,
-        required=not github_token,
-        help=(
-            "Personal access token for GitHub. "
-            "Can also be set via environment variable: GITHUB_TOKEN"
-        ),
+        env_var="GITHUB_TOKEN",
+        required=True,
+        help="Personal access token for GitHub.",
     )
-    vercel_token = os.environ.get("BLOB_READ_WRITE_TOKEN")
     parser.add_argument(
         "--vercel-blob-token",
-        default=vercel_token,
-        required=not vercel_token,
-        help=(
-            "Token for uploads to a vercel blop. "
-            "Can also be set via environment variable: BLOB_READ_WRITE_TOKEN"
-        ),
+        required=True,
+        env_var="BLOB_READ_WRITE_TOKEN",
+        help="Token for uploads to a vercel blop.",
     )
     parser.add_argument(
+        "-d",
         "--dry-run",
         action="store_true",
         help="Run through the migration without creating any objects on GitHub.",
@@ -531,20 +521,36 @@ def _parse_args():
         help="Disables closing migrated issues.",
     )
     parser.add_argument(
+        "-l",
         "--log-level",
         choices=logging.getLevelNamesMapping().keys(),
         default="INFO",
         help=("Set log level"),
     )
-    args = parser.parse_args()
-    return args
+    parser.add_argument(
+        "-s",
+        "--show-config",
+        action="store_true",
+        help="Show effective config and exit (requires valid config).",
+    )
+    return parser
 
 
 def main_cli():
     """Main program for running this script."""
-    args = _parse_args()
+    parser = _define_args()
+    options = parser.parse_args()
+
+    if options.show_config:
+        print(options)
+        print("----------")
+        print(parser.format_help())
+        print("----------")
+        print(parser.format_values())
+        return
+
     level_mapping = logging.getLevelNamesMapping()
-    target_level = level_mapping.get(args.log_level.upper(), logging.INFO)
+    target_level = level_mapping.get(options.log_level.upper(), logging.INFO)
     logging.basicConfig(
         format="{asctime} {levelname} {message}",
         style="{",
@@ -553,14 +559,14 @@ def main_cli():
     )
 
     m = Migrator(
-        no_close_issues=args.no_close_issues,
-        github_repo=args.github_repo,
-        github_token=args.github_token,
-        gitlab_host=args.gitlab_host,
-        gitlab_repo=args.gitlab_repo,
-        gitlab_token=args.gitlab_token,
-        is_dry_run=args.dry_run,
-        vercel_blob_token=args.vercel_blob_token,
+        no_close_issues=options.no_close_issues,
+        github_repo=options.github_repo,
+        github_token=options.github_token,
+        gitlab_host=options.gitlab_host,
+        gitlab_repo=options.gitlab_repo,
+        gitlab_token=options.gitlab_token,
+        is_dry_run=options.dry_run,
+        vercel_blob_token=options.vercel_blob_token,
     )
     try:
         m.connect()
