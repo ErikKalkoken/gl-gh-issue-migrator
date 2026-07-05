@@ -10,8 +10,8 @@ from issue_migrator.main import (
     GITLAB_PUBLIC_HOST,
     REQUEST_TIMEOUT,
     Migrator,
-    _defang_gitlab_mentions,
     _download_embedded_file_from_gitlab,
+    _migrate_mentions,
     _remove_image_sizes,
     _upload_file_to_vercel,
 )
@@ -30,6 +30,7 @@ def create_migrator(**kwargs):
         "gitlab_token": "gitlab_token",
         "is_dry_run": False,
         "vercel_blob_token": "vercel_blob_token",
+        "user_mention": {},
     }
     params.update(kwargs)
     m = Migrator(**params)
@@ -267,10 +268,9 @@ class TestMigrator_MigrateEmbeddedFiles(unittest.TestCase):
                     self.assertEqual(result, expected)
 
 
-class TestGitLabMentionSubstitutor(unittest.TestCase):
+class TestMigrateMentions(unittest.TestCase):
 
-    def test_emphasize_gitlab_mentions(self):
-        # Test table: (description, input_text, expected_output)
+    def test_deactivate_unknown_mentions(self):
         test_cases = [
             (
                 "Standard mention",
@@ -311,9 +311,20 @@ class TestGitLabMentionSubstitutor(unittest.TestCase):
 
         for description, input_text, expected in test_cases:
             with self.subTest(msg=description):
-                actual = _defang_gitlab_mentions(input_text)
+                actual = _migrate_mentions(input_text, {})
                 self.assertEqual(
                     actual,
                     expected,
                     f"\nFailed on: '{description}'\nExpected: {expected}\nGot: {actual}",
                 )
+
+    def test_can_map_known_mentions(self):
+        # given
+        input_text = "Hello @alice, welcome!"
+
+        # when
+        got = _migrate_mentions(input_text, {"alice": "alice2"})
+
+        # then
+        want = "Hello @alice2, welcome!"
+        self.assertEqual(got, want)

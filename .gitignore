@@ -221,3 +221,4 @@ __marimo__/
 # Local
 .env
 .vscode/
+config.ini

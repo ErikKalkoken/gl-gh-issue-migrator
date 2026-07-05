@@ -8,14 +8,19 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import PurePath
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import configargparse
 import gitlab
 import requests
 import vercel_blob
+import yaml
 from github import Auth, Github
-from github.GithubException import BadCredentialsException, UnknownObjectException
+from github.GithubException import (
+    BadCredentialsException,
+    GithubException,
+    UnknownObjectException,
+)
 from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
@@ -101,26 +106,31 @@ class Migrator:
 
     def __init__(
         self,
+        github_repo: str,
+        github_token: str,
         gitlab_host: str,
         gitlab_repo: str,
         gitlab_token: str,
-        github_repo: str,
-        github_token: str,
-        vercel_blob_token: str,
         is_dry_run: bool,
         no_close_issues: bool,
+        skip_user_validation: bool,
+        user_mapping: Dict[str, str],
+        vercel_blob_token: str,
     ):
-        self.no_close_issues = no_close_issues
         self.github_repo = github_repo
         self.github_token = github_token
         self.gitlab_host = gitlab_host
         self.gitlab_repo = gitlab_repo
         self.gitlab_token = gitlab_token
         self.is_dry_run = is_dry_run
+        self.no_close_issues = no_close_issues
+        self.skip_user_validation = skip_user_validation
+        self.user_mapping = user_mapping
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
         self._gh_repo: Optional[Repository] = None
+        self._gh: Optional[Github] = None
 
     @property
     def gl(self) -> gitlab.Gitlab:
@@ -133,6 +143,12 @@ class Migrator:
         if self._gl_project is None:
             raise RuntimeError("Not yet configured")
         return self._gl_project
+
+    @property
+    def gh(self) -> Github:
+        if self._gh is None:
+            raise RuntimeError("Not yet configured")
+        return self._gh
 
     @property
     def gh_repo(self) -> Repository:
@@ -159,8 +175,8 @@ class Migrator:
 
         try:
             auth = Auth.Token(self.github_token)
-            gh = Github(auth=auth)
-            self._gh_repo = gh.get_repo(self.github_repo)
+            self._gh = Github(auth=auth)
+            self._gh_repo = self._gh.get_repo(self.github_repo)
 
         except BadCredentialsException as ex:
             raise MigrationError(f"GitHub token invalid: {ex}") from ex
@@ -173,8 +189,52 @@ class Migrator:
         )
 
     def run(self):
+        if not self._validate_user_mappings():
+            raise MigrationError("Some user mappings are not valid")
+
         self._sync_labels()
         self._migrate_issues()
+
+    def _validate_user_mappings(self) -> bool:
+        """Validates usernames in mapping against GitLab and GitHub server
+        and reports whether they are valid."""
+
+        if self.skip_user_validation:
+            logger.info("Skipped user validation")
+            return True
+
+        if not self.user_mapping:
+            logger.info("No user mapping defined")
+            return True
+
+        for username in self.user_mapping.keys():
+            users = self.gl.users.list(username=username, get_all=True)
+            if len(users) == 0:
+                logger.error("Unknown GitLab username: %s", username)
+                return False
+
+            user = users[0]
+            logger.debug("Found valid GitLab user: %s, %s", username, user.name)
+
+        for username in self.user_mapping.values():
+            query = f"user:{username}"
+            try:
+                result = self.gh.search_users(query)
+                if result.totalCount == 0:
+                    logger.error("Unknown GitHub username: %s", username)
+                    return False
+
+            except GithubException:
+                logger.error("Unknown GitHub username: %s", username)
+                return False
+
+            user = result[0]
+            display_name = user.name if user.name else user.login
+            logger.debug("Found valid GitHub user: %s, %s", username, display_name)
+
+        logger.info("All user names are valid")
+
+        return True
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
@@ -248,7 +308,7 @@ class Migrator:
         description_2 = self._migrate_embedded_files(
             gl_issue.description, str(gl_issue.encoded_id)
         )
-        description_2 = _defang_gitlab_mentions(description_2)
+        description_2 = _migrate_mentions(description_2, self.user_mapping)
         issue_body = (
             f"> 📦 **Migrated from GitLab**\n"
             f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
@@ -310,7 +370,7 @@ class Migrator:
         description_2 = self._migrate_embedded_files(
             gl_note.body, str(gl_issue.encoded_id)
         )
-        description_2 = _defang_gitlab_mentions(description_2)
+        description_2 = _migrate_mentions(description_2, self.user_mapping)
         formatted_comment = (
             f"> 📦 **Migrated Comment** "
             f"| **Author:** {author} "
@@ -351,19 +411,22 @@ class Migrator:
     def _migrate_embedded_file(self, text: str, issue_num: str, rel_url: str):
         filename = rel_url.split("/")[-1]
 
-        data = _download_embedded_file_from_gitlab(
-            self.gitlab_host,
-            str(self.gl_project.encoded_id),
-            rel_url,
-            self.gitlab_token,
-        )
-        if not data:
-            return text
+        if not self.is_dry_run:
+            data = _download_embedded_file_from_gitlab(
+                self.gitlab_host,
+                str(self.gl_project.encoded_id),
+                rel_url,
+                self.gitlab_token,
+            )
+            if not data:
+                return text
 
-        path = PurePath(self.github_repo) / issue_num / filename
-        new_image_url = _upload_file_to_vercel(path, data, self.vercel_blob_token)
-        if not new_image_url:
-            return text
+            path = PurePath(self.github_repo) / issue_num / filename
+            new_image_url = _upload_file_to_vercel(path, data, self.vercel_blob_token)
+            if not new_image_url:
+                return text
+        else:
+            new_image_url = f"migrated/{filename}"
 
         text = text.replace(rel_url, new_image_url)
         return text
@@ -437,9 +500,10 @@ def _remove_image_sizes(markdown_text: str) -> str:
     return re.sub(pattern, replacer, markdown_text)
 
 
-def _defang_gitlab_mentions(text: str) -> str:
-    """Deactivate @user mentions in GitLab descriptions
+def _migrate_mentions(text: str, user_mapping: Dict[str, str]) -> str:
+    """Migrates @user mentions in GitLab descriptions
     and ignore any mentions found inside inline code, code blocks, or emails.
+    Will substitutae when a mapping is given. Otherwise disable the mention.
     """
     # 1. Matches multi-line code blocks
     # 2. Matches inline code blocks
@@ -452,7 +516,14 @@ def _defang_gitlab_mentions(text: str) -> str:
             return match.group(0)
 
         # Group 3 matched the user mention
-        mention = "@\u200b" + match.group(3)
+        mention = match.group(3)
+
+        if mention in user_mapping:
+            mention = "@" + user_mapping[mention]
+
+        else:
+            mention = "@\u200b" + mention  # disables the mention
+            logger.warning("Found mention for unmapped user: %s", mention)
 
         # Gitlab usernames cannot end in standard punctuation.
         # If a trailing period/comma/exclamation was caught, separate it.
@@ -467,7 +538,9 @@ def _defang_gitlab_mentions(text: str) -> str:
 
 
 def _define_args() -> configargparse.ArgumentParser:
-    parser = configargparse.ArgumentParser(
+    parser = configargparse.ArgParser(
+        default_config_files=["config.ini"],
+        config_file_parser_class=configargparse.ConfigparserConfigFileParser,
         description=package_doc,
         formatter_class=configargparse.ArgumentDefaultsHelpFormatter,
     )
@@ -533,6 +606,23 @@ def _define_args() -> configargparse.ArgumentParser:
         action="store_true",
         help="Show effective config and exit (requires valid config).",
     )
+    parser.add_argument(
+        "--user-mapping",
+        type=yaml.safe_load,
+        default={},
+        help=(
+            "Define mapping of user handles as JSON string. "
+            "Mapping is from Gitlab to Guthub, "
+            "Note that user mentions that are not defined here will be muted."
+            "e.g."
+            '{"user1_gl":"user1_gh", "ErikKalkoken":"ErikKalkoken"}'
+        ),
+    )
+    parser.add_argument(
+        "--skip-user-validation",
+        action="store_true",
+        help="When set will skip validating users mappings.",
+    )
     return parser
 
 
@@ -543,8 +633,6 @@ def main_cli():
 
     if options.show_config:
         print(options)
-        print("----------")
-        print(parser.format_help())
         print("----------")
         print(parser.format_values())
         return
@@ -559,20 +647,27 @@ def main_cli():
     )
 
     m = Migrator(
-        no_close_issues=options.no_close_issues,
         github_repo=options.github_repo,
         github_token=options.github_token,
         gitlab_host=options.gitlab_host,
         gitlab_repo=options.gitlab_repo,
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
+        no_close_issues=options.no_close_issues,
+        skip_user_validation=options.skip_user_validation,
+        user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
     )
     try:
         m.connect()
+    except MigrationError as ex:
+        logger.critical("Connection error: %s", ex.message)
+        sys.exit(1)
+
+    try:
         m.run()
     except MigrationError as ex:
-        logger.critical("Migration error: %s", ex.message)
+        logger.error("Migration error: %s", ex.message)
         sys.exit(1)
 
     if m.is_dry_run:
