@@ -96,23 +96,25 @@ class Migrator:
 
     def __init__(
         self,
-        github_repo: str,
+        github_repo_name: str,
         github_token: str,
         gitlab_host: str,
-        gitlab_repo: str,
+        gitlab_repo_name: str,
         gitlab_token: str,
         is_dry_run: bool,
+        issue_ids: List[int],
         no_close_issues: bool,
         skip_user_validation: bool,
         user_mapping: Dict[str, str],
         vercel_blob_token: str,
     ):
-        self.github_repo = github_repo
+        self.github_repo_name = github_repo_name
         self.github_token = github_token
         self.gitlab_host = gitlab_host
-        self.gitlab_repo = gitlab_repo
+        self.gitlab_repo_name = gitlab_repo_name
         self.gitlab_token = gitlab_token
         self.is_dry_run = is_dry_run
+        self.issue_ids = set(issue_ids or [])
         self.no_close_issues = no_close_issues
         self.skip_user_validation = skip_user_validation
         self.user_mapping = user_mapping
@@ -149,12 +151,12 @@ class Migrator:
     def connect(self):
         self._gl = gitlab.Gitlab(url=self.gitlab_host, private_token=self.gitlab_token)
         try:
-            self._gl_project = self.gl.projects.get(self.gitlab_repo)
+            self._gl_project = self.gl.projects.get(self.gitlab_repo_name)
         except GitlabAuthenticationError as ex:
             raise MigrationError(message=f"GitLab token not valid: {ex}") from ex
         except GitlabGetError as ex:
             raise MigrationError(
-                message=f"GitLab project not found: {self.gitlab_repo}"
+                message=f"GitLab project not found: {self.gitlab_repo_name}"
             ) from ex
 
         logger.info(
@@ -166,13 +168,15 @@ class Migrator:
         try:
             auth = Auth.Token(self.github_token)
             self._gh = Github(auth=auth)
-            self._gh_repo = self._gh.get_repo(self.github_repo)
+            self._gh_repo = self._gh.get_repo(self.github_repo_name)
 
         except BadCredentialsException as ex:
             raise MigrationError(f"GitHub token invalid: {ex}") from ex
 
         except UnknownObjectException as ex:
-            raise MigrationError(f"GitHub repo not found: {self.github_repo}") from ex
+            raise MigrationError(
+                f"GitHub repo not found: {self.github_repo_name}"
+            ) from ex
 
         logger.info(
             "Connected to GitHub repo: %s (ID: %d", self.gh_repo.name, self.gh_repo.id
@@ -272,36 +276,90 @@ class Migrator:
             sort="asc",
             iterator=True,
         )
+        if not issues.total:
+            logger.warning("Found no issues to migrate")
+            return
+
+        migrated_count = 0
+        skipped_count = 0
+        failed_count = 0
+
+        def progress_str() -> str:
+            if not issues.total:
+                return "[?]"
+            p = round(
+                (migrated_count + skipped_count + failed_count) / issues.total * 100, 0
+            )
+            return f"[{p:.0f}%]"
+
         logger.info("Found %d opened issue to migrate", issues.total)
-        done_count = 0
         for gl_issue in issues:
+            if self.issue_ids and gl_issue.iid not in self.issue_ids:
+                logger.info(
+                    "Skipping not included issue: %s %s",
+                    _issue_str(gl_issue),
+                    progress_str(),
+                )
+                skipped_count += 1
+                continue
+
             try:
+                if self._issue_exists(gl_issue):
+                    logger.warning(
+                        "Skipping already migrated issue: %s %s",
+                        _issue_str(gl_issue),
+                        progress_str(),
+                    )
+                    skipped_count += 1
+                    continue
+
                 self._migrate_issue(gl_issue)
             except Exception as ex:
                 logger.error(
-                    "Failed to migrate issue #%s: %s", gl_issue.iid, ex, exc_info=True
+                    "Failed to migrate issue %s: %s",
+                    _issue_str(gl_issue),
+                    ex,
+                    exc_info=True,
                 )
+                failed_count += 1
                 continue
 
-            done_count += 1
+            migrated_count += 1
             logger.info(
-                "Migrated GL issue #%s: %s [%d / %d]",
-                gl_issue.iid,
+                "Migrated GL issue %s: %s %s",
+                _issue_str(gl_issue),
                 gl_issue.title,
-                done_count,
-                issues.total,
+                progress_str(),
             )
 
+        logger.info(
+            "Finished processing %d issues: %d migrated, %d skipped, %d failed.",
+            issues.total,
+            migrated_count,
+            skipped_count,
+            failed_count,
+        )
+
+    def _issue_exists(self, gl_issue: ProjectIssue) -> bool:
+        """Report whether an GitLab issue exists on GitHub."""
+        search_string = _issue_str(gl_issue)
+        query = f"{search_string} repo:{self.github_repo_name} type:issue state:open"
+        found_issues = self.gh.search_issues(query)
+        return found_issues.totalCount > 0
+
     def _migrate_issue(self, gl_issue: ProjectIssue):
+        """Migrate an issue."""
         author = gl_issue.author.get("name") or "?"
         orig_labels = ", ".join(sorted(gl_issue.labels))
+        description_2 = gl_issue.description or ""
         description_2 = self._migrate_embedded_files(
-            gl_issue.description, str(gl_issue.encoded_id)
+            description_2, str(gl_issue.encoded_id)
         )
         description_2 = _migrate_mentions(description_2, self.user_mapping)
+        issue_str = _issue_str(gl_issue)
         issue_body = (
             f"> 📦 **Migrated from GitLab**\n"
-            f"> **Original Issue:** [GL-#{gl_issue.iid}]({gl_issue.web_url})\n"
+            f"> **Original Issue:** [{issue_str}]({gl_issue.web_url})\n"
             f"> **Author:** {author}\n"
             f"> **Created At:** {gl_issue.created_at}\n"
             f"> **State at Migration:** {gl_issue.state}\n"
@@ -330,9 +388,9 @@ class Migrator:
                 self._migrate_note(gl_issue, gh_issue, gl_note)
             except Exception as ex:
                 logger.error(
-                    "Failed to migrate note #%s for issue #%s: %s",
+                    "Failed to migrate note #%s for issue %s: %s",
                     gl_note.get_id(),
-                    gl_issue.get_id(),
+                    _issue_str(gl_issue),
                     ex,
                     exc_info=True,
                 )
@@ -411,7 +469,7 @@ class Migrator:
             if not data:
                 return text
 
-            path = PurePath(self.github_repo) / issue_num / filename
+            path = PurePath(self.github_repo_name) / issue_num / filename
             new_image_url = _upload_file_to_vercel(path, data, self.vercel_blob_token)
             if not new_image_url:
                 return text
@@ -525,3 +583,8 @@ def _migrate_mentions(text: str, user_mapping: Dict[str, str]) -> str:
         return f"{mention}{trailing_punctuation}"
 
     return re.sub(pattern, replace, text)
+
+
+def _issue_str(issue: ProjectIssue) -> str:
+    """Return string representation of a GitLab issue ID."""
+    return f"GL-#{issue.iid:04d}"

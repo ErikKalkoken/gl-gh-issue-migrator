@@ -27,12 +27,17 @@ def _define_args() -> configargparse.ArgumentParser:
     parser.add_argument("-v", "--version", action="version", version=__version__)
     gitlab_host = os.environ.get("GITLAB_HOST")
     parser.add_argument(
-        "gitlab_repo",
+        "gitlab_repo_name",
         help="Name of the GitLab repository, e.g. ErikKalkoken/aa-structures",
     )
     parser.add_argument(
-        "github_repo",
+        "github_repo_name",
         help="Name of the GitHub repository, e.g. ErikKalkoken/aa-structures",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run through the migration without making any changes.",
     )
     parser.add_argument(
         "--gitlab-host",
@@ -55,21 +60,13 @@ def _define_args() -> configargparse.ArgumentParser:
         help="Personal access token for GitHub.",
     )
     parser.add_argument(
-        "--vercel-blob-token",
-        required=True,
-        env_var="BLOB_READ_WRITE_TOKEN",
-        help="Token for uploads to a vercel blop.",
-    )
-    parser.add_argument(
-        "-d",
-        "--dry-run",
-        action="store_true",
-        help="Run through the migration without creating any objects on GitHub.",
-    )
-    parser.add_argument(
-        "--no-close-issues",
-        action="store_true",
-        help="Disables closing migrated issues.",
+        "--issue-id",
+        type=int,
+        action="append",
+        help=(
+            "Only include issue given by ID. "
+            "This arg can be specified multiple times to add more IDs."
+        ),
     )
     parser.add_argument(
         "-l",
@@ -79,10 +76,19 @@ def _define_args() -> configargparse.ArgumentParser:
         help=("Set log level"),
     )
     parser.add_argument(
-        "-s",
+        "--no-close-issues",
+        action="store_true",
+        help="Disables closing migrated issues.",
+    )
+    parser.add_argument(
         "--show-config",
         action="store_true",
         help="Show effective config and exit (requires valid config).",
+    )
+    parser.add_argument(
+        "--skip-user-validation",
+        action="store_true",
+        help="When set will skip validating users mappings.",
     )
     parser.add_argument(
         "--user-mapping",
@@ -97,9 +103,10 @@ def _define_args() -> configargparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--skip-user-validation",
-        action="store_true",
-        help="When set will skip validating users mappings.",
+        "--vercel-blob-token",
+        required=True,
+        env_var="BLOB_READ_WRITE_TOKEN",
+        help="Token for uploads to a vercel blop.",
     )
     return parser
 
@@ -125,12 +132,13 @@ def main_cli():
     )
 
     m = Migrator(
-        github_repo=options.github_repo,
+        github_repo_name=options.github_repo_name,
         github_token=options.github_token,
         gitlab_host=options.gitlab_host,
-        gitlab_repo=options.gitlab_repo,
+        gitlab_repo_name=options.gitlab_repo_name,
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
+        issue_ids=options.issue_id,
         no_close_issues=options.no_close_issues,
         skip_user_validation=options.skip_user_validation,
         user_mapping=dict(options.user_mapping),

@@ -22,12 +22,13 @@ MODULE_PATH = "issue_migrator.migrator"
 def create_migrator(**kwargs):
     """Return a new migrator with preset values."""
     params = {
-        "github_repo": "ErikKalkoken/github-repo",
+        "github_repo_name": "ErikKalkoken/github-repo",
         "github_token": "github_token",
         "gitlab_host": GITLAB_PUBLIC_HOST,
-        "gitlab_repo": "ErikKalkoken/gitlab-repo",
+        "gitlab_repo_name": "ErikKalkoken/gitlab-repo",
         "gitlab_token": "gitlab_token",
         "is_dry_run": False,
+        "issue_ids": [],
         "no_close_issues": False,
         "skip_user_validation": False,
         "user_mapping": {},
