@@ -27,6 +27,14 @@ def _define_args() -> configargparse.ArgumentParser:
     parser.add_argument("-v", "--version", action="version", version=__version__)
     gitlab_host = os.environ.get("GITLAB_HOST")
     parser.add_argument(
+        "gitlab_repo",
+        help="Name of the GitLab repository, e.g. ErikKalkoken/aa-structures",
+    )
+    parser.add_argument(
+        "github_repo",
+        help="Name of the GitHub repository, e.g. ErikKalkoken/aa-structures",
+    )
+    parser.add_argument(
         "--gitlab-host",
         default=gitlab_host or GITLAB_PUBLIC_HOST,
         help=(
@@ -35,20 +43,10 @@ def _define_args() -> configargparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--gitlab-repo",
-        required=True,
-        help="Name of the GitLab repository, e.g. ErikKalkoken/aa-structures",
-    )
-    parser.add_argument(
         "--gitlab-token",
         env_var="GITLAB_TOKEN",
         required=True,
         help="Personal access token for GitLab.",
-    )
-    parser.add_argument(
-        "--github-repo",
-        required=True,
-        help="Name of the GitHub repository, e.g. ErikKalkoken/aa-structures",
     )
     parser.add_argument(
         "--github-token",
