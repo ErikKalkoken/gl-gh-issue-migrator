@@ -6,8 +6,8 @@ from unittest import mock
 import pook
 from gitlab.v4.objects import Project
 
-from issue_migrator.main import (
-    GITLAB_PUBLIC_HOST,
+from issue_migrator.main import GITLAB_PUBLIC_HOST
+from issue_migrator.migrator import (
     REQUEST_TIMEOUT,
     Migrator,
     _download_embedded_file_from_gitlab,
@@ -16,21 +16,22 @@ from issue_migrator.main import (
     _upload_file_to_vercel,
 )
 
-MODULE_PATH = "issue_migrator.main"
+MODULE_PATH = "issue_migrator.migrator"
 
 
 def create_migrator(**kwargs):
     """Return a new migrator with preset values."""
     params = {
-        "close_issues": False,
         "github_repo": "ErikKalkoken/github-repo",
         "github_token": "github_token",
         "gitlab_host": GITLAB_PUBLIC_HOST,
         "gitlab_repo": "ErikKalkoken/gitlab-repo",
         "gitlab_token": "gitlab_token",
         "is_dry_run": False,
+        "no_close_issues": False,
+        "skip_user_validation": False,
+        "user_mapping": {},
         "vercel_blob_token": "vercel_blob_token",
-        "user_mention": {},
     }
     params.update(kwargs)
     m = Migrator(**params)
