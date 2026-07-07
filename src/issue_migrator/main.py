@@ -17,6 +17,46 @@ logger = logging.getLogger(__name__)
 GITLAB_PUBLIC_HOST = "https://gitlab.com"
 
 
+class ColoredFormatter(logging.Formatter):
+    # Define ANSI escape codes for colors
+    blue = "\x1b[34;20m"
+    red_bold = "\x1b[31;1m"
+    grey = "\x1b[38;20m"
+    purple_bold = "\x1b[35;1m"
+    red = "\x1b[31;20m"
+    reset = "\x1b[0m"
+    yellow = "\x1b[33;20m"
+
+    # The format you want for your logs
+    log_format = "%(asctime)s %(levelname)s %(message)s"
+
+    def __init__(self, use_color: bool = True):
+        super().__init__()
+        self.use_color = use_color
+
+        if self.use_color:
+            self.FORMATS = {
+                logging.DEBUG: self.blue + self.log_format + self.reset,
+                logging.INFO: self.grey + self.log_format + self.reset,
+                logging.WARNING: self.yellow + self.log_format + self.reset,
+                logging.ERROR: self.red + self.log_format + self.reset,
+                logging.CRITICAL: self.purple_bold + self.log_format + self.reset,
+            }
+        else:
+            self.FORMATS = {
+                logging.DEBUG: self.log_format,
+                logging.INFO: self.log_format,
+                logging.WARNING: self.log_format,
+                logging.ERROR: self.log_format,
+                logging.CRITICAL: self.log_format,
+            }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, datefmt="%Y/%m/%d %H:%M")
+        return formatter.format(record)
+
+
 def _define_args() -> configargparse.ArgumentParser:
     parser = configargparse.ArgParser(
         default_config_files=["config.ini"],
@@ -81,6 +121,11 @@ def _define_args() -> configargparse.ArgumentParser:
         help="Disables closing migrated issues.",
     )
     parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="When set will disable colors in output",
+    )
+    parser.add_argument(
         "--show-config",
         action="store_true",
         help="Show effective config and exit (requires valid config).",
@@ -96,7 +141,7 @@ def _define_args() -> configargparse.ArgumentParser:
         default={},
         help=(
             "Define mapping of user handles as JSON string. "
-            "Mapping is from Gitlab to Guthub, "
+            "Mapping is from Gitlab to Github, "
             "Note that user mentions that are not defined here will be muted."
             "e.g."
             '{"user1_gl":"user1_gh", "ErikKalkoken":"ErikKalkoken"}'
@@ -106,7 +151,7 @@ def _define_args() -> configargparse.ArgumentParser:
         "--vercel-blob-token",
         required=True,
         env_var="BLOB_READ_WRITE_TOKEN",
-        help="Token for uploads to a vercel blop.",
+        help="Token for uploads to a vercel blob.",
     )
     return parser
 
@@ -116,20 +161,20 @@ def main_cli():
     parser = _define_args()
     options = parser.parse_args()
 
+    level_mapping = logging.getLevelNamesMapping()
+    target_level = level_mapping.get(options.log_level.upper(), logging.INFO)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(ColoredFormatter(use_color=not options.no_color))
+    logging.basicConfig(
+        level=target_level,
+        handlers=[console_handler],
+    )
+
     if options.show_config:
         print(options)
         print("----------")
         print(parser.format_values())
         return
-
-    level_mapping = logging.getLevelNamesMapping()
-    target_level = level_mapping.get(options.log_level.upper(), logging.INFO)
-    logging.basicConfig(
-        format="{asctime} {levelname} {message}",
-        style="{",
-        datefmt="%Y/%m/%d %H:%M",
-        level=target_level,
-    )
 
     m = Migrator(
         github_repo_name=options.github_repo_name,
