@@ -295,33 +295,33 @@ class Migrator:
         logger.info("Found %d opened issue to migrate", issues.total)
         for gl_issue in issues:
             if self.issue_ids and gl_issue.iid not in self.issue_ids:
+                skipped_count += 1
                 logger.info(
                     "Skipping not included issue: %s %s",
                     _issue_str(gl_issue),
                     progress_str(),
                 )
-                skipped_count += 1
                 continue
 
             try:
                 if self._issue_exists(gl_issue):
+                    skipped_count += 1
                     logger.warning(
                         "Skipping already migrated issue: %s %s",
                         _issue_str(gl_issue),
                         progress_str(),
                     )
-                    skipped_count += 1
                     continue
 
                 self._migrate_issue(gl_issue)
             except Exception as ex:
+                failed_count += 1
                 logger.error(
                     "Failed to migrate issue %s: %s",
                     _issue_str(gl_issue),
                     ex,
                     exc_info=True,
                 )
-                failed_count += 1
                 continue
 
             migrated_count += 1
@@ -369,8 +369,25 @@ class Migrator:
         )
         logger.debug("Issue %s: %s", gl_issue.encoded_id, gl_issue.description)
 
+        gl_assignees = [assignee.get("username") for assignee in gl_issue.assignees]
+        gh_assignees = []
+        for gl_user in gl_assignees:
+            try:
+                gh_user = self.user_mapping[gl_user]
+            except KeyError:
+                logger.warning("Skipping unknown assingee: %s %s", gl_user, issue_str)
+                continue
+            gh_assignees.append(gh_user)
+
         if not self.is_dry_run:
-            gh_issue = self.gh_repo.create_issue(title=gl_issue.title, body=issue_body)
+            params = {
+                "title": gl_issue.title,
+                "body": issue_body,
+            }
+            if gh_assignees:
+                params["assignees"] = gh_assignees
+
+            gh_issue = self.gh_repo.create_issue(**params)
 
             gh_issue.add_to_labels(LABEL_MIGRATED)
             for label in gl_issue.labels:
@@ -571,7 +588,7 @@ def _migrate_mentions(text: str, user_mapping: Dict[str, str]) -> str:
 
         else:
             mention = "@\u200b" + mention  # disables the mention
-            logger.warning("Found mention for unmapped user: %s", mention)
+            logger.warning("Disabled mention for unmapped user: %s", mention)
 
         # Gitlab usernames cannot end in standard punctuation.
         # If a trailing period/comma/exclamation was caught, separate it.
