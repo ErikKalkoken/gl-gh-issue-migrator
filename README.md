@@ -22,7 +22,9 @@ A tool for migrating issues from a GitHub project to a GitLab repo.
 
 ## How to use
 
-1. Import GitLab project into GitHub via official import feature on web site
-2. Update user mappings
-3. Migrate issues with issue-migrator
-4. Add migration note & archive GH project
+1. Create a bot user account on GitHub (optional but recommended)
+2. Create and store tokens for GitLab, GitHub and Vercel Blob in the config file
+3. Import GitLab project into GitHub via official import feature on web site
+4. Update user mappings
+5. Migrate issues with issue-migrator
+6. Add migration note & archive GH project

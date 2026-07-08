@@ -104,7 +104,7 @@ class Migrator:
         is_dry_run: bool,
         issue_ids: List[int],
         no_close_issues: bool,
-        skip_user_validation: bool,
+        no_user_validation: bool,
         user_mapping: Dict[str, str],
         vercel_blob_token: str,
     ):
@@ -116,7 +116,7 @@ class Migrator:
         self.is_dry_run = is_dry_run
         self.issue_ids = set(issue_ids or [])
         self.no_close_issues = no_close_issues
-        self.skip_user_validation = skip_user_validation
+        self.no_user_validation = no_user_validation
         self.user_mapping = user_mapping
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
@@ -150,24 +150,30 @@ class Migrator:
 
     def connect(self):
         self._gl = gitlab.Gitlab(url=self.gitlab_host, private_token=self.gitlab_token)
+
         try:
+            self._gl.auth()
             self._gl_project = self.gl.projects.get(self.gitlab_repo_name)
+
         except GitlabAuthenticationError as ex:
             raise MigrationError(message=f"GitLab token not valid: {ex}") from ex
+
         except GitlabGetError as ex:
             raise MigrationError(
                 message=f"GitLab project not found: {self.gitlab_repo_name}"
             ) from ex
 
         logger.info(
-            "Connected to GitLab project: %s (ID: %s)",
+            "Connected to GitLab project: %s (ID: %s) as %s",
             self.gl_project.name_with_namespace,
             self.gl_project.id,
+            self._gl.user.username,  # type: ignore
         )
 
         try:
             auth = Auth.Token(self.github_token)
             self._gh = Github(auth=auth)
+            gh_user = self._gh.get_user()
             self._gh_repo = self._gh.get_repo(self.github_repo_name)
 
         except BadCredentialsException as ex:
@@ -179,7 +185,10 @@ class Migrator:
             ) from ex
 
         logger.info(
-            "Connected to GitHub repo: %s (ID: %d", self.gh_repo.name, self.gh_repo.id
+            "Connected to GitHub repo: %s (ID: %d) as %s",
+            self.gh_repo.name,
+            self.gh_repo.id,
+            gh_user.login,
         )
 
     def run(self):
@@ -193,7 +202,7 @@ class Migrator:
         """Validates usernames in mapping against GitLab and GitHub server
         and reports whether they are valid."""
 
-        if self.skip_user_validation:
+        if self.no_user_validation:
             logger.info("Skipped user validation")
             return True
 

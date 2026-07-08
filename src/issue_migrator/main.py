@@ -131,7 +131,7 @@ def _define_args() -> configargparse.ArgumentParser:
         help="Show effective config and exit (requires valid config).",
     )
     parser.add_argument(
-        "--skip-user-validation",
+        "--no-user-validation",
         action="store_true",
         help="When set will skip validating users mappings.",
     )
@@ -185,7 +185,7 @@ def main_cli():
         is_dry_run=options.dry_run,
         issue_ids=options.issue_id,
         no_close_issues=options.no_close_issues,
-        skip_user_validation=options.skip_user_validation,
+        no_user_validation=options.no_user_validation,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
     )
