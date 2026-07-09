@@ -19,6 +19,7 @@ from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
+from rich.progress import Progress
 
 from . import messages
 
@@ -106,6 +107,7 @@ class Migrator:
         is_dry_run: bool,
         issue_ids: List[int],
         no_close_issues: bool,
+        no_migration: bool,
         no_user_validation: bool,
         user_mapping: Dict[str, str],
         vercel_blob_token: str,
@@ -118,6 +120,7 @@ class Migrator:
         self.is_dry_run = is_dry_run
         self.issue_ids = set(issue_ids or [])
         self.no_close_issues = no_close_issues
+        self.no_migration = no_migration
         self.no_user_validation = no_user_validation
         self.user_mapping = user_mapping
         self.vercel_blob_token = vercel_blob_token
@@ -194,6 +197,10 @@ class Migrator:
         if not self._validate_user_mappings():
             raise MigrationError("Some user mappings are not valid")
 
+        if self.no_migration:
+            messages.info("User requested to skip migration")
+            return
+
         self._sync_labels()
         self._migrate_issues()
 
@@ -209,56 +216,57 @@ class Migrator:
             messages.notice("No user mapping defined")
             return True
 
-        total_count = len(self.user_mapping) * 2
-        confirmed_count = 0
-        failed_count = 0
-
-        def progress_str() -> str:
-            if not total_count:
-                return "[?]"
-            p = round((confirmed_count + failed_count) / total_count * 100, 0)
-            return f"\\[{p:.0f}%]"
-
-        for username in self.user_mapping.keys():
-            users = self.gl.users.list(username=username, get_all=True)
-            if len(users) == 0:
-                failed_count += 1
-                messages.error(f"Unknown GitLab username: {username} {progress_str()}")
-                continue
-
-            user = users[0]
-            confirmed_count += 1
-            messages.notice(
-                f"GitLab user confirmed: {username}, {user.name} {progress_str()}"
+        gl_ok = True
+        with Progress() as progress:
+            task = progress.add_task(
+                "Validating GitLab users...", total=len(self.user_mapping.keys())
             )
-
-        for username in self.user_mapping.values():
-            query = f"user:{username}"
-            try:
-                result = self.gh.search_users(query)
-                if result.totalCount == 0:
-                    failed_count += 1
+            for username in self.user_mapping.keys():
+                users = self.gl.users.list(username=username, get_all=True)
+                if len(users) == 0:
+                    gl_ok = False
                     messages.error(
-                        f"Unknown GitHub username: {username} {progress_str()}"
+                        f"Unknown GitLab username: {username}", progress.console
                     )
+                    progress.advance(task)
                     continue
 
-            except GithubException:
-                failed_count += 1
-                messages.error(f"Unknown GitHub username: {username} {progress_str()}")
-                continue
+                progress.advance(task)
 
-            user = result[0]
-            display_name = user.name if user.name else user.login
-            confirmed_count += 1
-            messages.notice(
-                f"GitHub user confirmed: {username}, {display_name} {progress_str()}"
+        if gl_ok:
+            messages.success("GitLab usernames are valid")
+
+        gh_ok = True
+        with Progress() as progress:
+            task = progress.add_task(
+                "Validating GitHub users...", total=len(self.user_mapping.values())
             )
+            for username in self.user_mapping.values():
+                query = f"user:{username}"
+                try:
+                    result = self.gh.search_users(query)
+                    if result.totalCount == 0:
+                        gh_ok = False
+                        messages.error(
+                            f"Unknown GitHub username: {username}", progress.console
+                        )
+                        progress.advance(task)
+                        continue
 
-        if not failed_count:
-            messages.notice("All user names are valid")
+                except GithubException:
+                    gh_ok = False
+                    messages.error(
+                        f"Unknown GitHub username: {username}", progress.console
+                    )
+                    progress.advance(task)
+                    continue
 
-        return not failed_count
+                progress.advance(task)
+
+        if gh_ok:
+            messages.success("GitHub usernames are valid")
+
+        return gh_ok and gl_ok
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""

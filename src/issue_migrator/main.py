@@ -76,6 +76,14 @@ def _define_args() -> configargparse.ArgumentParser:
         help="When set will disable colors in output",
     )
     parser.add_argument(
+        "--no-migration",
+        action="store_true",
+        help=(
+            "When set will not run the migration. "
+            "Useful when one only wants to validate user mappings"
+        ),
+    )
+    parser.add_argument(
         "--show-config",
         action="store_true",
         help="Show effective config and exit (requires valid config).",
@@ -126,6 +134,7 @@ def main_cli():
         is_dry_run=options.dry_run,
         issue_ids=options.issue_id,
         no_close_issues=options.no_close_issues,
+        no_migration=options.no_migration,
         no_user_validation=options.no_user_validation,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
@@ -133,13 +142,13 @@ def main_cli():
     try:
         m.connect()
     except MigrationError as ex:
-        messages.critical(f"Connection error: {ex.message}")
+        messages.critical(ex.message)
         sys.exit(1)
 
     try:
         m.run()
     except MigrationError as ex:
-        messages.error(f"Migration error: {ex.message}")
+        messages.critical(ex.message)
         sys.exit(1)
 
     if m.is_dry_run:

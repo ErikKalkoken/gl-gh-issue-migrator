@@ -1,4 +1,5 @@
 import enum
+from typing import Optional
 
 from rich.console import Console
 
@@ -25,35 +26,36 @@ _STYLE = {
 _console = Console()
 
 
-def _message(text: str, level: _Level):
-    _console.print(f"\\[{level.name}] {text}", style=_STYLE.get(level))
+def _message(text: str, level: _Level, console: Optional[Console]):
+    console = console or _console
+    console.print(f"\\[{level.name}] {text}", style=_STYLE.get(level))
 
 
-def critical(text: str):
+def critical(text: str, console: Optional[Console] = None):
     """Produce a critical message."""
-    _message(text, _Level.CRITICAL)
+    _message(text, _Level.CRITICAL, console)
 
 
-def error(text: str):
+def error(text: str, console: Optional[Console] = None):
     """Produce an error message."""
-    _message(text, _Level.ERROR)
+    _message(text, _Level.ERROR, console)
 
 
-def info(text: str):
+def info(text: str, console: Optional[Console] = None):
     """Produce an info message."""
-    _message(text, _Level.INFO)
+    _message(text, _Level.INFO, console)
 
 
-def notice(text: str):
+def notice(text: str, console: Optional[Console] = None):
     """Produce a notice message."""
-    _message(text, _Level.NOTICE)
+    _message(text, _Level.NOTICE, console)
 
 
-def success(text: str):
+def success(text: str, console: Optional[Console] = None):
     """Produce a success message."""
-    _message(text, _Level.SUCCESS)
+    _message(text, _Level.SUCCESS, console)
 
 
-def warning(text: str):
+def warning(text: str, console: Optional[Console] = None):
     """Produce a warning message."""
-    _message(text, _Level.WARNING)
+    _message(text, _Level.WARNING, console)
