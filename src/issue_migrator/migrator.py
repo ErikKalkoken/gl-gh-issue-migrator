@@ -20,13 +20,16 @@ from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 from rich import progress
+from rich.console import Console
+from rich.logging import RichHandler
 
 from . import messages
 
-logger = logging.getLogger(__name__)
-
 REQUEST_TIMEOUT = 10  # seconds
 LABEL_MIGRATED = "source: gitlab"
+LOG_LEVEL = "WARN"
+LOG_FORMAT = "%(message)s"
+LOG_DATEFMT = "[%X]"
 
 GITHUB_LABEL_COLORS = [  # spell-checker: disable
     # Reds & Pinks
@@ -216,6 +219,7 @@ class Migrator:
 
         gl_ok = True
         with progress.Progress(transient=True) as pb:
+            _configure_logging(pb.console)
             task = pb.add_task(
                 "Validating GitLab users...", total=len(self.user_mapping.keys())
             )
@@ -236,6 +240,7 @@ class Migrator:
 
         gh_ok = True
         with progress.Progress(transient=True) as pb:
+            _configure_logging(pb.console)
             task = pb.add_task(
                 "Validating GitHub users...", total=len(self.user_mapping.values())
             )
@@ -282,9 +287,9 @@ class Migrator:
                     random.choice(GITHUB_LABEL_COLORS),
                     description="This issue was migrated from GitLab",
                 )
-                messages.notice(f"Created missing label: {LABEL_MIGRATED}")
+                messages.notice(f'Created missing label: "{LABEL_MIGRATED}"')
             else:
-                messages.notice(f"Label missing: {LABEL_MIGRATED}")
+                messages.notice(f'Label missing: "{LABEL_MIGRATED}"')
 
         gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
         # messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
@@ -294,7 +299,7 @@ class Migrator:
             messages.notice("Labels are in sync")
             return
 
-        names = ", ".join(sorted(missing_labels))
+        names = '"' + '", "'.join(sorted(missing_labels)) + '"'
         messages.info(f"Missing labels: {names}")
         if self.is_dry_run:
             return
@@ -339,6 +344,7 @@ class Migrator:
             progress.TimeRemainingColumn(),
             transient=True,
         ) as pb:
+            _configure_logging(pb.console)
             task = pb.add_task("Migrating issues...", total=issues.total)
             for gl_issue in issues:
                 if self.issue_ids and gl_issue.iid not in self.issue_ids:
@@ -402,7 +408,7 @@ class Migrator:
         issue_str = _issue_str(gl_issue)
         issue_body = (
             f"> 📦 **Migrated from GitLab**\n"
-            f"> **Original Issue:** \\[{issue_str}]({gl_issue.web_url})\n"
+            f"> **Original Issue:** [{issue_str}]({gl_issue.web_url})\n"
             f"> **Author:** {author}\n"
             f"> **Created At:** {gl_issue.created_at}\n"
             f"> **State at Migration:** {gl_issue.state}\n"
@@ -581,6 +587,17 @@ class Migrator:
         return re.sub(pattern, replace, text)
 
 
+def _configure_logging(console: Console):
+    """Configure logging to log into console."""
+    logging.basicConfig(
+        level=LOG_LEVEL,
+        format=LOG_FORMAT,
+        datefmt="[%X]",
+        handlers=[RichHandler(console=console, rich_tracebacks=True)],
+        force=True,
+    )
+
+
 def _download_embedded_file_from_gitlab(
     host_url: str, project_id: str, rel_url: str, token: str
 ) -> bytes:
@@ -604,8 +621,8 @@ def _download_embedded_file_from_gitlab(
         return bytes()
 
     image = response.content
-    mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-    messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
+    # mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+    # messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
     return image
 
 
@@ -616,8 +633,8 @@ def _upload_file_to_vercel(path: PurePath, data: bytes, token: str) -> str:
     )
     # messages.debug(f"Vercel file upload: {path} {response}")
     url = response.get("url") or ""
-    if url:
-        messages.notice(f"Uploaded file to vercel: {url}")
+    # if url:
+    # messages.notice(f"Uploaded file to vercel: {url}")
     return url
 
 
