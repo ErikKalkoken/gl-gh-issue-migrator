@@ -84,6 +84,11 @@ def _define_args() -> configargparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-labels",
+        action="store_true",
+        help=("When set will not run sync labels."),
+    )
+    parser.add_argument(
         "--show-config",
         action="store_true",
         help="Show effective config and exit (requires valid config).",
@@ -135,6 +140,7 @@ def main_cli():
         issue_ids=options.issue_id,
         no_close_issues=options.no_close_issues,
         no_migration=options.no_migration,
+        no_labels=options.no_labels,
         no_user_validation=options.no_user_validation,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,

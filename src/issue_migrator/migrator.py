@@ -19,7 +19,7 @@ from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
-from rich.progress import Progress
+from rich.progress import Progress, track
 
 from . import messages
 
@@ -107,6 +107,7 @@ class Migrator:
         is_dry_run: bool,
         issue_ids: List[int],
         no_close_issues: bool,
+        no_labels: bool,
         no_migration: bool,
         no_user_validation: bool,
         user_mapping: Dict[str, str],
@@ -120,6 +121,7 @@ class Migrator:
         self.is_dry_run = is_dry_run
         self.issue_ids = set(issue_ids or [])
         self.no_close_issues = no_close_issues
+        self.no_labels = no_labels
         self.no_migration = no_migration
         self.no_user_validation = no_user_validation
         self.user_mapping = user_mapping
@@ -197,10 +199,6 @@ class Migrator:
         if not self._validate_user_mappings():
             raise MigrationError("Some user mappings are not valid")
 
-        if self.no_migration:
-            messages.info("User requested to skip migration")
-            return
-
         self._sync_labels()
         self._migrate_issues()
 
@@ -217,7 +215,7 @@ class Migrator:
             return True
 
         gl_ok = True
-        with Progress() as progress:
+        with Progress(transient=True) as progress:
             task = progress.add_task(
                 "Validating GitLab users...", total=len(self.user_mapping.keys())
             )
@@ -235,6 +233,8 @@ class Migrator:
 
         if gl_ok:
             messages.success("GitLab usernames are valid")
+        else:
+            messages.notice("Completed validating GitLab usernames")
 
         gh_ok = True
         with Progress() as progress:
@@ -265,16 +265,19 @@ class Migrator:
 
         if gh_ok:
             messages.success("GitHub usernames are valid")
+        else:
+            messages.notice("Completed validating GitHub usernames")
 
         return gh_ok and gl_ok
 
     def _sync_labels(self):
-        """Ensure GL labels also exists on GH."""
-        gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
-        messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
+        """Check for missing labels in GitHub repo and add them when missing."""
+        if self.no_labels:
+            messages.notice("User requested to skip label sync")
+            return
 
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
-        messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
+        # messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
 
         if LABEL_MIGRATED not in gh_labels:
             if not self.is_dry_run:
@@ -287,27 +290,37 @@ class Migrator:
             else:
                 messages.notice(f"Label missing: {LABEL_MIGRATED}")
 
-        has_missing = False
-        for label in gl_labels:
-            if label in gh_labels:
-                continue
+        gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
+        # messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
 
-            has_missing = True
-            if not self.is_dry_run:
-                self.gh_repo.create_label(
-                    label,
-                    random.choice(GITHUB_LABEL_COLORS),
-                    description="This label was migrated from GitLab",
-                )
-                messages.notice(f"Created missing label: {label}")
-            else:
-                messages.notice(f"Label missing: {label}")
+        missing_labels = gl_labels - gh_labels
+        if not missing_labels:
+            messages.notice("Labels are in sync")
+            return
 
-        if not has_missing:
-            messages.info("Labels are in sync")
+        names = ", ".join(sorted(missing_labels))
+        messages.info(f"Missing labels: {names}")
+        if self.is_dry_run:
+            return
+
+        for label in track(
+            missing_labels, description="Creating missing labels...", transient=True
+        ):
+            self.gh_repo.create_label(
+                label,
+                random.choice(GITHUB_LABEL_COLORS),
+                description="This label was migrated from GitLab",
+            )
+
+        messages.success("Created missing labels")
 
     def _migrate_issues(self):
         """Migrate all issues of a project."""
+
+        if self.no_migration:
+            messages.notice("User requested to skip migration")
+            return
+
         issues = self.gl_project.issues.list(
             state="opened",
             order_by="created_at",
