@@ -322,7 +322,7 @@ class Migrator:
             )
             return f"\\[{p:.0f}%]"
 
-        messages.notice(f"Found {issues.total} opened issue to migrate")
+        messages.info(f"Found {issues.total} opened issue to migrate")
         for gl_issue in issues:
             if self.issue_ids and gl_issue.iid not in self.issue_ids:
                 skipped_count += 1
@@ -374,7 +374,7 @@ class Migrator:
         description_2 = self._migrate_embedded_files(
             description_2, str(gl_issue.encoded_id)
         )
-        description_2 = _migrate_mentions(description_2, self.user_mapping)
+        description_2 = self._migrate_mentions(description_2)
         issue_str = _issue_str(gl_issue)
         issue_body = (
             f"> 逃 **Migrated from GitLab**\n"
@@ -454,7 +454,7 @@ class Migrator:
         description_2 = self._migrate_embedded_files(
             gl_note.body, str(gl_issue.encoded_id)
         )
-        description_2 = _migrate_mentions(description_2, self.user_mapping)
+        description_2 = self._migrate_mentions(description_2)
         formatted_comment = (
             f"> 📦 **Migrated Comment** "
             f"| **Author:** {author} "
@@ -523,6 +523,43 @@ class Migrator:
         text = text.replace(rel_url, new_image_url)
         return text
 
+    def _migrate_mentions(self, text: str) -> str:
+        """Migrates @user mentions in GitLab descriptions
+        and ignore any mentions found inside inline code, code blocks, or emails.
+        Will substitutae when a mapping is given. Otherwise disable the mention.
+        """
+        # 1. Matches multi-line code blocks
+        # 2. Matches inline code blocks
+        # 3. Matches @username (ignoring mid-word/email @ symbols)
+        pattern = r"(```[\s\S]*?```)|(`[^`\n]+?`)|(?<!\w)@([\w.-]+)"
+
+        def replace(match):
+            # If group 1 or group 2 matched, we are inside a code block. Return it as-is.
+            if match.group(1) or match.group(2):
+                return match.group(0)
+
+            # Group 3 matched the user mention
+            username = match.group(3)
+
+            # Gitlab usernames cannot end in standard punctuation.
+            # If a trailing period/comma/exclamation was caught, separate it.
+            trailing_punctuation = ""
+            while username and username[-1] in ".,!?":
+                trailing_punctuation = username[-1] + trailing_punctuation
+                username = username[:-1]
+
+            if username in self.user_mapping:
+                mention = "@" + self.user_mapping[username]
+
+            else:
+                mention = "@\u200b" + username  # disables the mention
+                messages.warning(f"Disabled mention for unknown user: {username}")
+                self._unknown_users.add(username)
+
+            return f"{mention}{trailing_punctuation}"
+
+        return re.sub(pattern, replace, text)
+
 
 def _download_embedded_file_from_gitlab(
     host_url: str, project_id: str, rel_url: str, token: str
@@ -584,43 +621,6 @@ def _remove_image_sizes(markdown_text: str) -> str:
         return match.group(2)
 
     return re.sub(pattern, replacer, markdown_text)
-
-
-def _migrate_mentions(text: str, user_mapping: Dict[str, str]) -> str:
-    """Migrates @user mentions in GitLab descriptions
-    and ignore any mentions found inside inline code, code blocks, or emails.
-    Will substitutae when a mapping is given. Otherwise disable the mention.
-    """
-    # 1. Matches multi-line code blocks
-    # 2. Matches inline code blocks
-    # 3. Matches @username (ignoring mid-word/email @ symbols)
-    pattern = r"(```[\s\S]*?```)|(`[^`\n]+?`)|(?<!\w)@([\w.-]+)"
-
-    def replace(match):
-        # If group 1 or group 2 matched, we are inside a code block. Return it as-is.
-        if match.group(1) or match.group(2):
-            return match.group(0)
-
-        # Group 3 matched the user mention
-        mention = match.group(3)
-
-        if mention in user_mapping:
-            mention = "@" + user_mapping[mention]
-
-        else:
-            mention = "@\u200b" + mention  # disables the mention
-            messages.warning(f"Disabled mention for unknown user: {mention}")
-
-        # Gitlab usernames cannot end in standard punctuation.
-        # If a trailing period/comma/exclamation was caught, separate it.
-        trailing_punctuation = ""
-        while mention and mention[-1] in ".,!?":
-            trailing_punctuation = mention[-1] + trailing_punctuation
-            mention = mention[:-1]
-
-        return f"{mention}{trailing_punctuation}"
-
-    return re.sub(pattern, replace, text)
 
 
 def _issue_str(issue: ProjectIssue) -> str:

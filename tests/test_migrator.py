@@ -11,7 +11,6 @@ from issue_migrator.migrator import (
     REQUEST_TIMEOUT,
     Migrator,
     _download_embedded_file_from_gitlab,
-    _migrate_mentions,
     _remove_image_sizes,
     _upload_file_to_vercel,
 )
@@ -30,7 +29,7 @@ def create_migrator(**kwargs):
         "is_dry_run": False,
         "issue_ids": [],
         "no_close_issues": False,
-        "skip_user_validation": False,
+        "no_user_validation": False,
         "user_mapping": {},
         "vercel_blob_token": "vercel_blob_token",
     }
@@ -311,9 +310,10 @@ class TestMigrateMentions(unittest.TestCase):
             ),
         ]
 
+        m = create_migrator()
         for description, input_text, expected in test_cases:
             with self.subTest(msg=description):
-                actual = _migrate_mentions(input_text, {})
+                actual = m._migrate_mentions(input_text)
                 self.assertEqual(
                     actual,
                     expected,
@@ -323,9 +323,10 @@ class TestMigrateMentions(unittest.TestCase):
     def test_can_map_known_mentions(self):
         # given
         input_text = "Hello @alice, welcome!"
+        m = create_migrator(user_mapping={"alice": "alice2"})
 
         # when
-        got = _migrate_mentions(input_text, {"alice": "alice2"})
+        got = m._migrate_mentions(input_text)
 
         # then
         want = "Hello @alice2, welcome!"
