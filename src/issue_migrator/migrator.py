@@ -20,6 +20,8 @@ from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 
+from . import messages
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 10  # seconds
@@ -164,11 +166,9 @@ class Migrator:
                 message=f"GitLab project not found: {self.gitlab_repo_name}"
             ) from ex
 
-        logger.info(
-            "Connected to GitLab project: %s (ID: %s) as %s",
-            self.gl_project.name_with_namespace,
-            self.gl_project.id,
-            self._gl.user.username,  # type: ignore
+        messages.notice(
+            f"Connected to GitLab project: {self.gl_project.name_with_namespace} "
+            f"(ID: {self.gl_project.id}) as {self._gl.user.username}"  # type: ignore
         )
 
         try:
@@ -185,11 +185,9 @@ class Migrator:
                 f"GitHub repo not found: {self.github_repo_name}"
             ) from ex
 
-        logger.info(
-            "Connected to GitHub repo: %s (ID: %d) as %s",
-            self.gh_repo.name,
-            self.gh_repo.id,
-            gh_user.login,
+        messages.notice(
+            f"Connected to GitHub repo: {self.gh_repo.name} (ID: {self.gh_repo.id}) "
+            f"as {gh_user.login}"
         )
 
     def run(self):
@@ -204,11 +202,11 @@ class Migrator:
         and reports whether they are valid."""
 
         if self.no_user_validation:
-            logger.info("Skipped user validation")
+            messages.notice("Skipped user validation")
             return True
 
         if not self.user_mapping:
-            logger.info("No user mapping defined")
+            messages.notice("No user mapping defined")
             return True
 
         total_count = len(self.user_mapping) * 2
@@ -219,19 +217,19 @@ class Migrator:
             if not total_count:
                 return "[?]"
             p = round((confirmed_count + failed_count) / total_count * 100, 0)
-            return f"[{p:.0f}%]"
+            return f"\\[{p:.0f}%]"
 
         for username in self.user_mapping.keys():
             users = self.gl.users.list(username=username, get_all=True)
             if len(users) == 0:
                 failed_count += 1
-                logger.error("Unknown GitLab username: %s %s", username, progress_str())
+                messages.error(f"Unknown GitLab username: {username} {progress_str()}")
                 continue
 
             user = users[0]
             confirmed_count += 1
-            logger.info(
-                "GitLab user confirmed: %s, %s %s", username, user.name, progress_str()
+            messages.notice(
+                f"GitLab user confirmed: {username}, {user.name} {progress_str()}"
             )
 
         for username in self.user_mapping.values():
@@ -240,38 +238,35 @@ class Migrator:
                 result = self.gh.search_users(query)
                 if result.totalCount == 0:
                     failed_count += 1
-                    logger.error(
-                        "Unknown GitHub username: %s %s", username, progress_str()
+                    messages.error(
+                        f"Unknown GitHub username: {username} {progress_str()}"
                     )
                     continue
 
             except GithubException:
                 failed_count += 1
-                logger.error("Unknown GitHub username: %s %s", username, progress_str())
+                messages.error(f"Unknown GitHub username: {username} {progress_str()}")
                 continue
 
             user = result[0]
             display_name = user.name if user.name else user.login
             confirmed_count += 1
-            logger.info(
-                "GitHub user confirmed: %s, %s %s",
-                username,
-                display_name,
-                progress_str(),
+            messages.notice(
+                f"GitHub user confirmed: {username}, {display_name} {progress_str()}"
             )
 
         if not failed_count:
-            logger.info("All user names are valid")
+            messages.notice("All user names are valid")
 
         return not failed_count
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
         gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
-        logger.debug("GL labels: %s", ", ".join(sorted(gl_labels)))
+        messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
 
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
-        logger.debug("GH labels: %s", ", ".join(sorted(gh_labels)))
+        messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
 
         if LABEL_MIGRATED not in gh_labels:
             if not self.is_dry_run:
@@ -280,9 +275,9 @@ class Migrator:
                     random.choice(GITHUB_LABEL_COLORS),
                     description="This issue was migrated from GitLab",
                 )
-                logger.info("Created missing label: %s", LABEL_MIGRATED)
+                messages.notice(f"Created missing label: {LABEL_MIGRATED}")
             else:
-                logger.info("Label missing: %s", LABEL_MIGRATED)
+                messages.notice(f"Label missing: {LABEL_MIGRATED}")
 
         has_missing = False
         for label in gl_labels:
@@ -296,12 +291,12 @@ class Migrator:
                     random.choice(GITHUB_LABEL_COLORS),
                     description="This label was migrated from GitLab",
                 )
-                logger.info("Created missing label: %s", label)
+                messages.notice(f"Created missing label: {label}")
             else:
-                logger.info("Label missing: %s", label)
+                messages.notice(f"Label missing: {label}")
 
         if not has_missing:
-            logger.info("Labels are in sync")
+            messages.info("Labels are in sync")
 
     def _migrate_issues(self):
         """Migrate all issues of a project."""
@@ -312,7 +307,7 @@ class Migrator:
             iterator=True,
         )
         if not issues.total:
-            logger.warning("Found no issues to migrate")
+            messages.warning("Found no issues to migrate")
             return
 
         migrated_count = 0
@@ -325,59 +320,44 @@ class Migrator:
             p = round(
                 (migrated_count + skipped_count + failed_count) / issues.total * 100, 0
             )
-            return f"[{p:.0f}%]"
+            return f"\\[{p:.0f}%]"
 
-        logger.info("Found %d opened issue to migrate", issues.total)
+        messages.notice(f"Found {issues.total} opened issue to migrate")
         for gl_issue in issues:
             if self.issue_ids and gl_issue.iid not in self.issue_ids:
                 skipped_count += 1
-                logger.info(
-                    "Skipping not included issue: %s %s",
-                    _issue_str(gl_issue),
-                    progress_str(),
+                messages.notice(
+                    f"Skipping not included issue: {_issue_str(gl_issue)} {progress_str()}"
                 )
                 continue
 
             try:
                 if self._issue_exists(gl_issue):
                     skipped_count += 1
-                    logger.warning(
-                        "Skipping already migrated issue: %s %s",
-                        _issue_str(gl_issue),
-                        progress_str(),
+                    messages.warning(
+                        f"Skipping already migrated issue: {_issue_str(gl_issue)} {progress_str()}"
                     )
                     continue
 
                 self._migrate_issue(gl_issue)
             except Exception as ex:
                 failed_count += 1
-                logger.error(
-                    "Failed to migrate issue %s: %s",
-                    _issue_str(gl_issue),
-                    ex,
-                    exc_info=True,
-                )
+                messages.error(f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}")
                 continue
 
             migrated_count += 1
-            logger.info(
-                "Migrated GL issue %s: %s %s",
-                _issue_str(gl_issue),
-                gl_issue.title,
-                progress_str(),
+            messages.success(
+                f"Migrated GL issue {_issue_str(gl_issue)}: {gl_issue.title} {progress_str()}"
             )
 
-        logger.info(
-            "Finished processing %d issues: %d migrated, %d skipped, %d failed.",
-            issues.total,
-            migrated_count,
-            skipped_count,
-            failed_count,
+        messages.info(
+            f"Finished processing {issues.total} issues: {migrated_count} migrated, "
+            f"{skipped_count} skipped, {failed_count} failed."
         )
         if self._unknown_users:
-            logger.warning("Unkown users: %s", ", ".join(sorted(self._unknown_users)))
+            messages.warning(f"Unkown users: {', '.join(sorted(self._unknown_users))}")
         else:
-            logger.info("No unknown users")
+            messages.notice("No unknown users")
 
     def _issue_exists(self, gl_issue: ProjectIssue) -> bool:
         """Report whether an GitLab issue exists on GitHub."""
@@ -397,8 +377,8 @@ class Migrator:
         description_2 = _migrate_mentions(description_2, self.user_mapping)
         issue_str = _issue_str(gl_issue)
         issue_body = (
-            f"> 📦 **Migrated from GitLab**\n"
-            f"> **Original Issue:** [{issue_str}]({gl_issue.web_url})\n"
+            f"> 逃 **Migrated from GitLab**\n"
+            f"> **Original Issue:** \\[{issue_str}]({gl_issue.web_url})\n"
             f"> **Author:** {author}\n"
             f"> **Created At:** {gl_issue.created_at}\n"
             f"> **State at Migration:** {gl_issue.state}\n"
@@ -406,7 +386,6 @@ class Migrator:
             f"---\n\n"
             f"{description_2}"
         )
-        logger.debug("Issue %s: %s", gl_issue.encoded_id, gl_issue.description)
 
         gl_assignees = [assignee.get("username") for assignee in gl_issue.assignees]
         gh_assignees = []
@@ -414,8 +393,8 @@ class Migrator:
             try:
                 gh_username = self.user_mapping[gl_username]
             except KeyError:
-                logger.warning(
-                    "Skipping unknown assingee: %s %s", gl_username, issue_str
+                messages.warning(
+                    f"Skipping unknown assingee: {gl_username} {issue_str}"
                 )
                 self._unknown_users.add(gl_username)
                 continue
@@ -447,12 +426,9 @@ class Migrator:
             try:
                 self._migrate_note(gl_issue, gh_issue, gl_note)
             except Exception as ex:
-                logger.error(
-                    "Failed to migrate note #%s for issue %s: %s",
-                    gl_note.get_id(),
-                    _issue_str(gl_issue),
-                    ex,
-                    exc_info=True,
+                messages.error(
+                    f"Failed to migrate note #{gl_note.get_id()} "
+                    f"for issue {_issue_str(gl_issue)}: {ex}",
                 )
                 continue
 
@@ -486,9 +462,6 @@ class Migrator:
             f"| [Link]({comment_url}) \n\n"
             f"{description_2}"
         )
-        logger.debug(
-            "Note %s-%s: %s", gl_issue.encoded_id, gl_note.id, gl_issue.description
-        )
         if gh_issue:
             gh_issue.create_comment(body=formatted_comment)
 
@@ -497,7 +470,7 @@ class Migrator:
         if username in self.user_mapping:
             display = "@" + self.user_mapping[username]
         else:
-            logger.warning("No mapping found for GL user: %s", username)
+            messages.warning(f"No mapping found for GL user: {username}")
             display = author.get("name") or "?"
             self._unknown_users.add(username)
 
@@ -563,25 +536,19 @@ def _download_embedded_file_from_gitlab(
     headers = {"PRIVATE-TOKEN": token}
     time.sleep(0.2)  # rate limit is 500 / minute
     response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
-    logger.debug(
-        "GitLab file download: GET %s %d %s",
-        url,
-        response.status_code,
-        response.headers,
-    )
+    # messages.debug(
+    #     f"GitLab file download: GET {url} {response.status_code} {response.headers}"
+    # )
     if not response.ok:
-        logger.error(
-            "Failed to download file %s from GitLab: %s %d %s",
-            filename,
-            url,
-            response.status_code,
-            response.text,
+        messages.error(
+            f"Failed to download file {filename} from GitLab: "
+            f"{url} {response.status_code} {response.text}"
         )
         return bytes()
 
     image = response.content
     mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-    logger.info("Downloaded file from GitLab: %s %s", filename, mime_type)
+    messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
     return image
 
 
@@ -590,10 +557,10 @@ def _upload_file_to_vercel(path: PurePath, data: bytes, token: str) -> str:
     response = vercel_blob.put(
         path=str(path), data=data, timeout=REQUEST_TIMEOUT, options=options
     )
-    logger.debug("Vercel file upload: %s %s", path, response)
+    # messages.debug(f"Vercel file upload: {path} {response}")
     url = response.get("url") or ""
     if url:
-        logger.info("Uploaded file to vercel: %s", url)
+        messages.notice(f"Uploaded file to vercel: {url}")
     return url
 
 
@@ -642,7 +609,7 @@ def _migrate_mentions(text: str, user_mapping: Dict[str, str]) -> str:
 
         else:
             mention = "@\u200b" + mention  # disables the mention
-            logger.warning("Disabled mention for unmapped user: %s", mention)
+            messages.warning(f"Disabled mention for unknown user: {mention}")
 
         # Gitlab usernames cannot end in standard punctuation.
         # If a trailing period/comma/exclamation was caught, separate it.
