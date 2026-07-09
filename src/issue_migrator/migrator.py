@@ -19,7 +19,7 @@ from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
-from rich.progress import Progress, track
+from rich import progress
 
 from . import messages
 
@@ -215,21 +215,19 @@ class Migrator:
             return True
 
         gl_ok = True
-        with Progress(transient=True) as progress:
-            task = progress.add_task(
+        with progress.Progress(transient=True) as pb:
+            task = pb.add_task(
                 "Validating GitLab users...", total=len(self.user_mapping.keys())
             )
             for username in self.user_mapping.keys():
                 users = self.gl.users.list(username=username, get_all=True)
                 if len(users) == 0:
                     gl_ok = False
-                    messages.error(
-                        f"Unknown GitLab username: {username}", progress.console
-                    )
-                    progress.advance(task)
+                    messages.error(f"Unknown GitLab username: {username}", pb.console)
+                    pb.advance(task)
                     continue
 
-                progress.advance(task)
+                pb.advance(task)
 
         if gl_ok:
             messages.success("GitLab usernames are valid")
@@ -237,8 +235,8 @@ class Migrator:
             messages.notice("Completed validating GitLab usernames")
 
         gh_ok = True
-        with Progress() as progress:
-            task = progress.add_task(
+        with progress.Progress(transient=True) as pb:
+            task = pb.add_task(
                 "Validating GitHub users...", total=len(self.user_mapping.values())
             )
             for username in self.user_mapping.values():
@@ -248,20 +246,18 @@ class Migrator:
                     if result.totalCount == 0:
                         gh_ok = False
                         messages.error(
-                            f"Unknown GitHub username: {username}", progress.console
+                            f"Unknown GitHub username: {username}", pb.console
                         )
-                        progress.advance(task)
+                        pb.advance(task)
                         continue
 
                 except GithubException:
                     gh_ok = False
-                    messages.error(
-                        f"Unknown GitHub username: {username}", progress.console
-                    )
-                    progress.advance(task)
+                    messages.error(f"Unknown GitHub username: {username}", pb.console)
+                    pb.advance(task)
                     continue
 
-                progress.advance(task)
+                pb.advance(task)
 
         if gh_ok:
             messages.success("GitHub usernames are valid")
@@ -303,7 +299,7 @@ class Migrator:
         if self.is_dry_run:
             return
 
-        for label in track(
+        for label in progress.track(
             missing_labels, description="Creating missing labels...", transient=True
         ):
             self.gh_repo.create_label(
@@ -335,41 +331,48 @@ class Migrator:
         skipped_count = 0
         failed_count = 0
 
-        def progress_str() -> str:
-            if not issues.total:
-                return "[?]"
-            p = round(
-                (migrated_count + skipped_count + failed_count) / issues.total * 100, 0
-            )
-            return f"\\[{p:.0f}%]"
-
         messages.info(f"Found {issues.total} opened issue to migrate")
-        for gl_issue in issues:
-            if self.issue_ids and gl_issue.iid not in self.issue_ids:
-                skipped_count += 1
-                messages.notice(
-                    f"Skipping not included issue: {_issue_str(gl_issue)} {progress_str()}"
-                )
-                continue
-
-            try:
-                if self._issue_exists(gl_issue):
+        with progress.Progress(
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.TextColumn("{task.completed} / {task.total}"),
+            progress.TimeRemainingColumn(),
+            transient=True,
+        ) as pb:
+            task = pb.add_task("Migrating issues...", total=issues.total)
+            for gl_issue in issues:
+                if self.issue_ids and gl_issue.iid not in self.issue_ids:
                     skipped_count += 1
-                    messages.warning(
-                        f"Skipping already migrated issue: {_issue_str(gl_issue)} {progress_str()}"
+                    messages.notice(
+                        f"Skipping not included issue: {_issue_str(gl_issue)}",
+                        pb.console,
                     )
+                    pb.advance(task)
                     continue
 
-                self._migrate_issue(gl_issue)
-            except Exception as ex:
-                failed_count += 1
-                messages.error(f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}")
-                continue
+                try:
+                    if self._issue_exists(gl_issue):
+                        skipped_count += 1
+                        messages.warning(
+                            f"Skipping already migrated issue: {_issue_str(gl_issue)}",
+                            pb.console,
+                        )
+                        pb.advance(task)
+                        continue
 
-            migrated_count += 1
-            messages.success(
-                f"Migrated GL issue {_issue_str(gl_issue)}: {gl_issue.title} {progress_str()}"
-            )
+                    self._migrate_issue(gl_issue, pb)
+
+                except Exception as ex:
+                    failed_count += 1
+                    messages.error(
+                        f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}",
+                        pb.console,
+                    )
+                    pb.advance(task)
+                    continue
+
+                pb.advance(task)
+                migrated_count += 1
 
         messages.info(
             f"Finished processing {issues.total} issues: {migrated_count} migrated, "
@@ -387,7 +390,7 @@ class Migrator:
         found_issues = self.gh.search_issues(query)
         return found_issues.totalCount > 0
 
-    def _migrate_issue(self, gl_issue: ProjectIssue):
+    def _migrate_issue(self, gl_issue: ProjectIssue, pb: progress.Progress):
         """Migrate an issue."""
         author = self._map_author(gl_issue.author)
         orig_labels = ", ".join(sorted(gl_issue.labels))
@@ -398,7 +401,7 @@ class Migrator:
         description_2 = self._migrate_mentions(description_2)
         issue_str = _issue_str(gl_issue)
         issue_body = (
-            f"> 逃 **Migrated from GitLab**\n"
+            f"> 📦 **Migrated from GitLab**\n"
             f"> **Original Issue:** \\[{issue_str}]({gl_issue.web_url})\n"
             f"> **Author:** {author}\n"
             f"> **Created At:** {gl_issue.created_at}\n"
@@ -414,9 +417,6 @@ class Migrator:
             try:
                 gh_username = self.user_mapping[gl_username]
             except KeyError:
-                messages.warning(
-                    f"Skipping unknown assingee: {gl_username} {issue_str}"
-                )
                 self._unknown_users.add(gl_username)
                 continue
 
@@ -450,8 +450,8 @@ class Migrator:
                 messages.error(
                     f"Failed to migrate note #{gl_note.get_id()} "
                     f"for issue {_issue_str(gl_issue)}: {ex}",
+                    pb.console,
                 )
-                continue
 
         if gh_issue and not self.no_close_issues:
             migration_note = (
@@ -480,7 +480,7 @@ class Migrator:
             f"> 📦 **Migrated Comment** "
             f"| **Author:** {author} "
             f"| **Date:** {gl_note.created_at} "
-            f"| [Link]({comment_url}) \n\n"
+            f"| [Original]({comment_url}) \n\n"
             f"{description_2}"
         )
         if gh_issue:
@@ -491,7 +491,7 @@ class Migrator:
         if username in self.user_mapping:
             display = "@" + self.user_mapping[username]
         else:
-            messages.warning(f"No mapping found for GL user: {username}")
+            # messages.warning(f"No mapping found for GL user: {username}")
             display = author.get("name") or "?"
             self._unknown_users.add(username)
 
@@ -574,7 +574,6 @@ class Migrator:
 
             else:
                 mention = "@\u200b" + username  # disables the mention
-                messages.warning(f"Disabled mention for unknown user: {username}")
                 self._unknown_users.add(username)
 
             return f"{mention}{trailing_punctuation}"
