@@ -218,7 +218,14 @@ class Migrator:
             return True
 
         gl_ok = True
-        with progress.Progress(transient=True) as pb:
+        with progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.TaskProgressColumn(),
+            progress.TimeRemainingColumn(),
+            transient=True,
+        ) as pb:
             _configure_logging(pb.console)
             task = pb.add_task(
                 "Validating GitLab users...", total=len(self.user_mapping.keys())
@@ -239,7 +246,14 @@ class Migrator:
             messages.notice("Completed validating GitLab usernames")
 
         gh_ok = True
-        with progress.Progress(transient=True) as pb:
+        with progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.TaskProgressColumn(),
+            progress.TimeRemainingColumn(),
+            transient=True,
+        ) as pb:
             _configure_logging(pb.console)
             task = pb.add_task(
                 "Validating GitHub users...", total=len(self.user_mapping.values())
@@ -338,6 +352,7 @@ class Migrator:
 
         messages.info(f"Found {issues.total} opened issue to migrate")
         with progress.Progress(
+            progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
             progress.BarColumn(),
             progress.TextColumn("{task.completed} / {task.total}"),
