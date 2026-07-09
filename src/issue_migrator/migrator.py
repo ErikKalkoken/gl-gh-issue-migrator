@@ -4,7 +4,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import PurePath
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import gitlab
 import requests
@@ -123,6 +123,7 @@ class Migrator:
         self._gl_project: Optional[Project] = None
         self._gh_repo: Optional[Repository] = None
         self._gh: Optional[Github] = None
+        self._unknown_users: Set[str] = set()
 
     @property
     def gl(self) -> gitlab.Gitlab:
@@ -210,34 +211,59 @@ class Migrator:
             logger.info("No user mapping defined")
             return True
 
+        total_count = len(self.user_mapping) * 2
+        confirmed_count = 0
+        failed_count = 0
+
+        def progress_str() -> str:
+            if not total_count:
+                return "[?]"
+            p = round((confirmed_count + failed_count) / total_count * 100, 0)
+            return f"[{p:.0f}%]"
+
         for username in self.user_mapping.keys():
             users = self.gl.users.list(username=username, get_all=True)
             if len(users) == 0:
-                logger.error("Unknown GitLab username: %s", username)
-                return False
+                failed_count += 1
+                logger.error("Unknown GitLab username: %s %s", username, progress_str())
+                continue
 
             user = users[0]
-            logger.debug("Found valid GitLab user: %s, %s", username, user.name)
+            confirmed_count += 1
+            logger.info(
+                "GitLab user confirmed: %s, %s %s", username, user.name, progress_str()
+            )
 
         for username in self.user_mapping.values():
             query = f"user:{username}"
             try:
                 result = self.gh.search_users(query)
                 if result.totalCount == 0:
-                    logger.error("Unknown GitHub username: %s", username)
-                    return False
+                    failed_count += 1
+                    logger.error(
+                        "Unknown GitHub username: %s %s", username, progress_str()
+                    )
+                    continue
 
             except GithubException:
-                logger.error("Unknown GitHub username: %s", username)
-                return False
+                failed_count += 1
+                logger.error("Unknown GitHub username: %s %s", username, progress_str())
+                continue
 
             user = result[0]
             display_name = user.name if user.name else user.login
-            logger.debug("Found valid GitHub user: %s, %s", username, display_name)
+            confirmed_count += 1
+            logger.info(
+                "GitHub user confirmed: %s, %s %s",
+                username,
+                display_name,
+                progress_str(),
+            )
 
-        logger.info("All user names are valid")
+        if not failed_count:
+            logger.info("All user names are valid")
 
-        return True
+        return not failed_count
 
     def _sync_labels(self):
         """Ensure GL labels also exists on GH."""
@@ -348,6 +374,10 @@ class Migrator:
             skipped_count,
             failed_count,
         )
+        if self._unknown_users:
+            logger.warning("Unkown users: %s", ", ".join(sorted(self._unknown_users)))
+        else:
+            logger.info("No unknown users")
 
     def _issue_exists(self, gl_issue: ProjectIssue) -> bool:
         """Report whether an GitLab issue exists on GitHub."""
@@ -358,7 +388,7 @@ class Migrator:
 
     def _migrate_issue(self, gl_issue: ProjectIssue):
         """Migrate an issue."""
-        author = gl_issue.author.get("name") or "?"
+        author = self._map_author(gl_issue.author)
         orig_labels = ", ".join(sorted(gl_issue.labels))
         description_2 = gl_issue.description or ""
         description_2 = self._migrate_embedded_files(
@@ -380,13 +410,17 @@ class Migrator:
 
         gl_assignees = [assignee.get("username") for assignee in gl_issue.assignees]
         gh_assignees = []
-        for gl_user in gl_assignees:
+        for gl_username in gl_assignees:
             try:
-                gh_user = self.user_mapping[gl_user]
+                gh_username = self.user_mapping[gl_username]
             except KeyError:
-                logger.warning("Skipping unknown assingee: %s %s", gl_user, issue_str)
+                logger.warning(
+                    "Skipping unknown assingee: %s %s", gl_username, issue_str
+                )
+                self._unknown_users.add(gl_username)
                 continue
-            gh_assignees.append(gh_user)
+
+            gh_assignees.append(gh_username)
 
         if not self.is_dry_run:
             params = {
@@ -439,7 +473,7 @@ class Migrator:
         gh_issue: Optional[Issue],
         gl_note: ProjectIssueNote,
     ):
-        author = gl_note.author.get("name") or "?"
+        author = self._map_author(gl_note.author)
         comment_url: str = f"{gl_issue.web_url}#note_{gl_note.id}"
         description_2 = self._migrate_embedded_files(
             gl_note.body, str(gl_issue.encoded_id)
@@ -457,6 +491,17 @@ class Migrator:
         )
         if gh_issue:
             gh_issue.create_comment(body=formatted_comment)
+
+    def _map_author(self, author):
+        username = author.get("username")
+        if username in self.user_mapping:
+            display = "@" + self.user_mapping[username]
+        else:
+            logger.warning("No mapping found for GL user: %s", username)
+            display = author.get("name") or "?"
+            self._unknown_users.add(username)
+
+        return display
 
     def _migrate_embedded_files(self, text: str, issue_num: str) -> str:
         """Return a new text version where all private URLs for embedded files
