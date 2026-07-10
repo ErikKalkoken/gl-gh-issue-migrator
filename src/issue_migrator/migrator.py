@@ -239,7 +239,7 @@ class Migrator:
             )
             for gl_username, gh_username in self.user_mapping.items():
                 current = f"{gl_username} -> {gh_username}"
-                pb.update(task, advance=1, current=current)
+                pb.update(task, current=current)
 
                 # gitlab user
                 gl_users = self.gl.users.list(username=gl_username, get_all=True)
@@ -264,6 +264,8 @@ class Migrator:
                     self.messages.error(
                         f"Unknown GitHub username: {gh_username}", pb.console
                     )
+
+                pb.advance(task)
 
         if ok:
             self.messages.success("user mapping are valid")
@@ -305,12 +307,13 @@ class Migrator:
                 "Creating missing labels", total=len(missing_names), current=""
             )
             for name in missing_names:
-                pb.update(task, advance=1, current=name)
+                pb.update(task, current=name)
                 self.gh_repo.create_label(
                     name,
                     random.choice(GITHUB_LABEL_COLORS),
                     description=gl_labels[name],
                 )
+                pb.advance(task)
 
         total = len(missing_names)
         self.messages.success(f"Created {total} missing labels")
@@ -349,7 +352,7 @@ class Migrator:
             task = pb.add_task("Migrating issues", total=issues.total, current="")
             for gl_issue in issues:
                 current = f"{_issue_str(gl_issue)}: {gl_issue.title}"
-                pb.update(task, advance=1, current=current)
+                pb.update(task, current=current)
 
                 if _issue_ids and gl_issue.iid not in _issue_ids:
                     skipped_count += 1
@@ -357,6 +360,7 @@ class Migrator:
                         f"Skipping not included issue: {_issue_str(gl_issue)}",
                         pb.console,
                     )
+                    pb.advance(task)
                     continue
 
                 try:
@@ -366,6 +370,7 @@ class Migrator:
                             f"Skipping already migrated issue: {_issue_str(gl_issue)}",
                             pb.console,
                         )
+                        pb.advance(task)
                         continue
 
                     self._migrate_issue(
@@ -380,9 +385,11 @@ class Migrator:
                         f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}",
                         pb.console,
                     )
+                    pb.advance(task)
                     continue
 
                 migrated_count += 1
+                pb.advance(task)
 
         self.messages.info(
             f"Finished processing {issues.total} issues: {migrated_count} migrated, "
@@ -540,13 +547,7 @@ class Migrator:
         filename = rel_url.split("/")[-1]
 
         if not self.is_dry_run:
-            data = _download_embedded_file_from_gitlab(
-                self.gitlab_host,
-                str(self.gl_project.encoded_id),
-                rel_url,
-                self.gitlab_token,
-                self.messages,
-            )
+            data = self._download_embedded_file_from_gitlab(rel_url)
             if not data:
                 return text
 
@@ -596,33 +597,30 @@ class Migrator:
 
         return re.sub(pattern, replace, text)
 
+    def _download_embedded_file_from_gitlab(self, rel_url: str) -> bytes:
+        """Download an embedded file from GitLab and return it.
 
-def _download_embedded_file_from_gitlab(
-    host_url: str, project_id: str, rel_url: str, token: str, messages: Messages
-) -> bytes:
-    """Download an embedded file from GitLab and return it.
+        Return empty when there was an error.
+        """
+        url = f"{self.gitlab_host}/-/project/{self.gl_project.encoded_id}/{rel_url.lstrip('.')}"
+        filename = rel_url.split("/")[-1]
+        headers = {"PRIVATE-TOKEN": self.gitlab_token}
+        time.sleep(0.2)  # rate limit is 500 / minute
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
+        # self.messages.debug(
+        #     f"GitLab file download: GET {url} {response.status_code} {response.headers}"
+        # )
+        if not response.ok:
+            self.messages.error(
+                f"Failed to download file {filename} from GitLab: "
+                f"{url} {response.status_code} {response.text}"
+            )
+            return bytes()
 
-    Return empty when there was an error.
-    """
-    url = f"{host_url}/-/project/{project_id}/{rel_url.lstrip('.')}"
-    filename = rel_url.split("/")[-1]
-    headers = {"PRIVATE-TOKEN": token}
-    time.sleep(0.2)  # rate limit is 500 / minute
-    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
-    # self.messages.debug(
-    #     f"GitLab file download: GET {url} {response.status_code} {response.headers}"
-    # )
-    if not response.ok:
-        messages.error(
-            f"Failed to download file {filename} from GitLab: "
-            f"{url} {response.status_code} {response.text}"
-        )
-        return bytes()
-
-    image = response.content
-    # mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-    # self.messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
-    return image
+        image = response.content
+        # mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+        # self.messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
+        return image
 
 
 def _upload_file_to_vercel(path: PurePath, data: bytes, token: str) -> str:

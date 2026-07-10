@@ -11,7 +11,6 @@ from issue_migrator.messages import Messages
 from issue_migrator.migrator import (
     REQUEST_TIMEOUT,
     Migrator,
-    _download_embedded_file_from_gitlab,
     _remove_image_sizes,
     _upload_file_to_vercel,
 )
@@ -120,7 +119,10 @@ class TestDownloadImageFromGitLab(unittest.TestCase):
         """Test successful image download."""
         host_url = "https://gitlab.example.com"
         token = "fake-token-123"
-        encoded_id = "my-group%2Fmy-project"
+        m = create_migrator(gitlab_token=token, gitlab_host=host_url)
+        gl_project = mock.MagicMock()
+        gl_project.encoded_id = "my-group%2Fmy-project"
+        m._gl_project = gl_project
         rel_url = "images/avatar.png"
         expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
         fake_binary_data = b"fake-jpeg-bytes"
@@ -132,9 +134,7 @@ class TestDownloadImageFromGitLab(unittest.TestCase):
             .body(fake_binary_data)
         )
 
-        result = _download_embedded_file_from_gitlab(
-            host_url, encoded_id, rel_url, token, mock.MagicMock()
-        )
+        result = m._download_embedded_file_from_gitlab(rel_url)
 
         self.assertEqual(result, fake_binary_data)
 
@@ -143,15 +143,16 @@ class TestDownloadImageFromGitLab(unittest.TestCase):
         """Test that the function returns None and logs error when GitLab returns non-200."""
         host_url = "https://gitlab.example.com"
         token = "fake-token-123"
-        encoded_id = "my-group%2Fmy-project"
+        m = create_migrator(gitlab_token=token, gitlab_host=host_url)
+        gl_project = mock.MagicMock()
+        gl_project.encoded_id = "my-group%2Fmy-project"
+        m._gl_project = gl_project
         rel_url = "images/avatar.png"
         expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
 
         (pook.get(expected_url).reply(404).body("Not Found"))
 
-        result = _download_embedded_file_from_gitlab(
-            host_url, encoded_id, rel_url, token, mock.MagicMock()
-        )
+        result = m._download_embedded_file_from_gitlab(rel_url)
 
         # Assert that it gracefully handled the failure and returned empty
         self.assertFalse(result)
@@ -255,7 +256,7 @@ class TestMigrator_MigrateEmbeddedFiles(unittest.TestCase):
             with self.subTest(name=name):
                 with (
                     mock.patch(
-                        MODULE_PATH + "._download_embedded_file_from_gitlab"
+                        MODULE_PATH + ".Migrator._download_embedded_file_from_gitlab"
                     ) as download,
                     mock.patch(MODULE_PATH + "._upload_file_to_vercel") as upload,
                 ):
