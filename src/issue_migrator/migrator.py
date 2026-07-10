@@ -27,6 +27,7 @@ from . import messages
 
 REQUEST_TIMEOUT = 10  # seconds
 LABEL_MIGRATED = "source: gitlab"
+MIGRATED_LABEL_DESCRIPTION = "This label was migrated from GitLab"
 LOG_LEVEL = "WARN"
 LOG_FORMAT = "%(message)s"
 LOG_DATEFMT = "[%X]"
@@ -265,43 +266,40 @@ class Migrator:
 
     def sync_labels(self):
         """Check for missing labels in GitHub repo and add them when missing."""
-        gh_labels = {x.name for x in self.gh_repo.get_labels()}
+
+        gh_label_names = {x.name for x in self.gh_repo.get_labels()}
         # messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
 
-        if LABEL_MIGRATED not in gh_labels:
-            if not self.is_dry_run:
-                self.gh_repo.create_label(
-                    LABEL_MIGRATED,
-                    random.choice(GITHUB_LABEL_COLORS),
-                    description="This issue was migrated from GitLab",
-                )
-                messages.notice(f'Created missing label: "{LABEL_MIGRATED}"')
-            else:
-                messages.notice(f'Label missing: "{LABEL_MIGRATED}"')
-
-        gl_labels = {label.name for label in self.gl_project.labels.list(iterator=True)}
+        gl_labels = {
+            label.name: MIGRATED_LABEL_DESCRIPTION
+            for label in self.gl_project.labels.list(iterator=True)
+        }
+        gl_labels[LABEL_MIGRATED] = "This issue was migrated from GitLab"
         # messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
 
-        missing_labels = gl_labels - gh_labels
-        if not missing_labels:
+        missing_names = set(gl_labels.keys()) - gh_label_names
+        if not missing_names:
             messages.notice("Labels are in sync")
             return
 
-        names = '"' + '", "'.join(sorted(missing_labels)) + '"'
-        messages.info(f"Missing labels: {names}")
+        _names = '"' + '", "'.join(sorted(missing_names)) + '"'
+        messages.info(f"Missing labels: {_names}")
         if self.is_dry_run:
             return
 
-        for label in progress.track(
-            missing_labels, description="Creating missing labels...", transient=True
+        for name in progress.track(
+            missing_names,
+            description="Creating missing labels...",
+            transient=True,
         ):
             self.gh_repo.create_label(
-                label,
+                name,
                 random.choice(GITHUB_LABEL_COLORS),
-                description="This label was migrated from GitLab",
+                description=gl_labels[name],
             )
 
-        messages.success("Created missing labels")
+        total = len(missing_names)
+        messages.success(f"Created {total} missing labels")
 
     def migrate_issues(
         self,
