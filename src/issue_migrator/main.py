@@ -130,7 +130,7 @@ def main_cli():
         print(parser.format_values())
         return
 
-    m = Migrator(
+    with Migrator(
         github_repo_name=options.github_repo_name,
         github_token=options.github_token,
         gitlab_host=options.gitlab_host,
@@ -144,23 +144,26 @@ def main_cli():
         no_user_validation=options.no_user_validation,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
-    )
-    try:
-        m.connect()
-    except MigrationError as ex:
-        messages.critical(ex.message)
-        sys.exit(1)
+    ) as m:
 
-    try:
-        m.run()
-    except MigrationError as ex:
-        messages.critical(ex.message)
-        sys.exit(1)
+        try:
+            m.connect()
 
-    if m.is_dry_run:
-        messages.success("Dry Run completed!")
-    else:
-        messages.success("Migration completed!")
+        except MigrationError as ex:
+            messages.critical(ex.message)
+            sys.exit(1)
+
+        try:
+            m.run()
+
+        except MigrationError as ex:
+            messages.critical(ex.message)
+            sys.exit(1)
+
+        if m.is_dry_run:
+            messages.success("Dry Run completed!")
+        else:
+            messages.success("Migration completed!")
 
 
 if __name__ == "__main__":

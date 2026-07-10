@@ -98,7 +98,10 @@ class MigrationError(Exception):
 
 
 class Migrator:
-    """The issue migrator."""
+    """The issue migrator.
+
+    Can be used as context manager.
+    """
 
     def __init__(
         self,
@@ -135,6 +138,14 @@ class Migrator:
         self._gh: Optional[Github] = None
         self._unknown_users: Set[str] = set()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+        return False
+
     @property
     def gl(self) -> gitlab.Gitlab:
         if self._gl is None:
@@ -160,6 +171,10 @@ class Migrator:
         return self._gh_repo
 
     def connect(self):
+        """Connect to GitLab and GitHub projects.
+
+        `close()` must be called if class is not used as context manager.
+        """
         self._gl = gitlab.Gitlab(url=self.gitlab_host, private_token=self.gitlab_token)
 
         try:
@@ -197,6 +212,13 @@ class Migrator:
             f"Connected to GitHub repo: {self.gh_repo.name} (ID: {self.gh_repo.id}) "
             f"as {gh_user.login}"
         )
+
+    def close(self):
+        if not self._gh:
+            return
+
+        self._gh.close()  # closes the GH connection
+        self._gh = None
 
     def run(self):
         if not self._validate_user_mappings():
@@ -401,8 +423,6 @@ class Migrator:
         )
         if self._unknown_users:
             messages.warning(f"Unkown users: {', '.join(sorted(self._unknown_users))}")
-        else:
-            messages.notice("No unknown users")
 
     def _issue_exists(self, gl_issue: ProjectIssue) -> bool:
         """Report whether an GitLab issue exists on GitHub."""
