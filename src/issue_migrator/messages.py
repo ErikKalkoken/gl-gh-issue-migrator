@@ -16,24 +16,28 @@ class _Level(enum.IntEnum):
 
 _STYLE = {
     _Level.CRITICAL: "bold magenta",
-    _Level.DEBUG: "blue",
+    _Level.DEBUG: "dim blue",
     _Level.ERROR: "bold red",
     _Level.INFO: "cyan",
     _Level.SUCCESS: "bold green",
     _Level.WARNING: "yellow",
 }
 
-_console = Console()
+_default_console = Console()
 
 
 def _message(text: str, level: _Level, console: Optional[Console]):
-    console = console or _console
-    console.print(f"\\[{level.name}] {text}", style=_STYLE.get(level))
+    console = console or _default_console
+    console.print(f"[{level.name}] {text}", style=_STYLE.get(level), markup=False)
 
 
 def critical(text: str, console: Optional[Console] = None):
     """Produce a critical message."""
     _message(text, _Level.CRITICAL, console)
+
+
+def debug(text: str, console: Optional[Console] = None) -> None:
+    _message(text, _Level.DEBUG, console)
 
 
 def error(text: str, console: Optional[Console] = None):

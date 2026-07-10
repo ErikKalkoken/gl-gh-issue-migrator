@@ -9,11 +9,11 @@ license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version", "description"]
 dependencies = [
-    "python-gitlab","PyGithub", "vercel_blob", "ConfigArgParse", "rich"
+    "python-gitlab","PyGithub", "vercel_blob", "ConfigArgParse", "rich", "pyyaml"
 ]
 
 [project.optional-dependencies]
-test = ["pook"]
+test = ["pook", "coverage"]
 
 [project.urls]
 Home = "https://gitlab.com/ErikKalkoken/aa-issue-migrator"
