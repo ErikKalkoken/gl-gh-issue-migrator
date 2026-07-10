@@ -7,6 +7,7 @@ import pook
 from gitlab.v4.objects import Project
 
 from issue_migrator.main import GITLAB_PUBLIC_HOST
+from issue_migrator.messages import Messages
 from issue_migrator.migrator import (
     REQUEST_TIMEOUT,
     Migrator,
@@ -27,6 +28,8 @@ def create_migrator(**kwargs):
         "gitlab_repo_name": "ErikKalkoken/gitlab-repo",
         "gitlab_token": "gitlab_token",
         "is_dry_run": False,
+        "messages": mock.MagicMock(spec=Messages),
+        "no_color": False,
         "user_mapping": {},
         "vercel_blob_token": "vercel_blob_token",
     }
@@ -130,7 +133,7 @@ class TestDownloadImageFromGitLab(unittest.TestCase):
         )
 
         result = _download_embedded_file_from_gitlab(
-            host_url, encoded_id, rel_url, token
+            host_url, encoded_id, rel_url, token, mock.MagicMock()
         )
 
         self.assertEqual(result, fake_binary_data)
@@ -147,7 +150,7 @@ class TestDownloadImageFromGitLab(unittest.TestCase):
         (pook.get(expected_url).reply(404).body("Not Found"))
 
         result = _download_embedded_file_from_gitlab(
-            host_url, encoded_id, rel_url, token
+            host_url, encoded_id, rel_url, token, mock.MagicMock()
         )
 
         # Assert that it gracefully handled the failure and returned empty

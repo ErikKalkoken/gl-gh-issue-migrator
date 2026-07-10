@@ -9,7 +9,8 @@ import yaml
 from issue_migrator.migrator import MigrationError, Migrator
 
 from . import __doc__ as package_doc
-from . import __version__, messages
+from . import __version__
+from .messages import Messages
 
 GITLAB_PUBLIC_HOST = "https://gitlab.com"
 
@@ -130,6 +131,8 @@ def main_cli():
         print(parser.format_values())
         return
 
+    messages = Messages()
+
     with Migrator(
         github_repo_name=options.github_repo_name,
         github_token=options.github_token,
@@ -137,6 +140,8 @@ def main_cli():
         gitlab_repo_name=options.gitlab_repo_name,
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
+        messages=messages,
+        no_color=options.no_color,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
     ) as m:

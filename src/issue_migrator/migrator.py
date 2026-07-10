@@ -21,7 +21,7 @@ from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 from rich import progress
 
-from . import messages
+from .messages import Messages
 
 logging.getLogger("github").setLevel(logging.WARNING)  # silence github debug logs
 
@@ -99,9 +99,11 @@ class MigrationError(Exception):
 
 
 class Migrator:
-    """The issue migrator.
+    """A class for migrating issues from a GitLab repo to a GitHub repo.
 
-    Can be used as context manager.
+    Should be as context manager to ensure connections are automatically closed.
+
+    `connect()` must be called before any other methods.
     """
 
     def __init__(
@@ -112,6 +114,8 @@ class Migrator:
         gitlab_repo_name: str,
         gitlab_token: str,
         is_dry_run: bool,
+        messages: Messages,
+        no_color: bool,
         user_mapping: Dict[str, str],
         vercel_blob_token: str,
     ):
@@ -121,6 +125,8 @@ class Migrator:
         self.gitlab_repo_name = gitlab_repo_name
         self.gitlab_token = gitlab_token
         self.is_dry_run = is_dry_run
+        self.messages = messages
+        self.no_color = no_color
         self.user_mapping = user_mapping
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
@@ -140,25 +146,25 @@ class Migrator:
     @property
     def gl(self) -> gitlab.Gitlab:
         if self._gl is None:
-            raise RuntimeError("Not yet configured")
+            raise RuntimeError("Not connected")
         return self._gl
 
     @property
     def gl_project(self) -> Project:
         if self._gl_project is None:
-            raise RuntimeError("Not yet configured")
+            raise RuntimeError("Not connected")
         return self._gl_project
 
     @property
     def gh(self) -> Github:
         if self._gh is None:
-            raise RuntimeError("Not yet configured")
+            raise RuntimeError("Not connected")
         return self._gh
 
     @property
     def gh_repo(self) -> Repository:
         if self._gh_repo is None:
-            raise RuntimeError("Not yet configured")
+            raise RuntimeError("Not connected")
         return self._gh_repo
 
     def connect(self):
@@ -180,7 +186,7 @@ class Migrator:
                 message=f"GitLab project not found: {self.gitlab_repo_name}"
             ) from ex
 
-        messages.notice(
+        self.messages.notice(
             f"Connected to GitLab project: {self.gl_project.name_with_namespace} "
             f"(ID: {self.gl_project.id}) as {self._gl.user.username}"  # type: ignore
         )
@@ -199,7 +205,7 @@ class Migrator:
                 f"GitHub repo not found: {self.github_repo_name}"
             ) from ex
 
-        messages.notice(
+        self.messages.notice(
             f"Connected to GitHub repo: {self.gh_repo.name} (ID: {self.gh_repo.id}) "
             f"as {gh_user.login}"
         )
@@ -216,7 +222,7 @@ class Migrator:
         and reports whether they are valid."""
 
         if not self.user_mapping:
-            messages.notice("No user mapping defined")
+            self.messages.notice("No user mapping defined")
             return True
 
         ok = True
@@ -239,7 +245,7 @@ class Migrator:
                 gl_users = self.gl.users.list(username=gl_username, get_all=True)
                 if len(gl_users) == 0:
                     ok = False
-                    messages.error(
+                    self.messages.error(
                         f"Unknown GitLab username: {gl_username}", pb.console
                     )
 
@@ -249,18 +255,18 @@ class Migrator:
                     result = self.gh.search_users(query)
                     if result.totalCount == 0:
                         ok = False
-                        messages.error(
+                        self.messages.error(
                             f"Unknown GitHub username: {gh_username}", pb.console
                         )
 
                 except GithubException:
                     ok = False
-                    messages.error(
+                    self.messages.error(
                         f"Unknown GitHub username: {gh_username}", pb.console
                     )
 
         if ok:
-            messages.success("user mapping are valid")
+            self.messages.success("user mapping are valid")
 
         return ok
 
@@ -268,22 +274,22 @@ class Migrator:
         """Check for missing labels in GitHub repo and add them when missing."""
 
         gh_label_names = {x.name for x in self.gh_repo.get_labels()}
-        # messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
+        # self.messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
 
         gl_labels = {
             label.name: MIGRATED_LABEL_DESCRIPTION
             for label in self.gl_project.labels.list(iterator=True)
         }
         gl_labels[LABEL_MIGRATED] = "This issue was migrated from GitLab"
-        # messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
+        # self.messages.notice(f"GL labels: {', '.join(sorted(gl_labels))}")
 
         missing_names = set(gl_labels.keys()) - gh_label_names
         if not missing_names:
-            messages.notice("Labels are in sync")
+            self.messages.notice("Labels are in sync")
             return
 
         _names = '"' + '", "'.join(sorted(missing_names)) + '"'
-        messages.info(f"Missing labels: {_names}")
+        self.messages.info(f"Missing labels: {_names}")
         if self.is_dry_run:
             return
 
@@ -307,7 +313,7 @@ class Migrator:
                 )
 
         total = len(missing_names)
-        messages.success(f"Created {total} missing labels")
+        self.messages.success(f"Created {total} missing labels")
 
     def migrate_issues(
         self,
@@ -324,14 +330,14 @@ class Migrator:
             iterator=True,
         )
         if not issues.total:
-            messages.info("Found no issues to migrate")
+            self.messages.info("Found no issues to migrate")
             return
 
         migrated_count = 0
         skipped_count = 0
         failed_count = 0
 
-        messages.info(f"Found {issues.total} opened issue to migrate")
+        self.messages.info(f"Found {issues.total} opened issue to migrate")
         with progress.Progress(
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
@@ -347,7 +353,7 @@ class Migrator:
 
                 if _issue_ids and gl_issue.iid not in _issue_ids:
                     skipped_count += 1
-                    messages.notice(
+                    self.messages.notice(
                         f"Skipping not included issue: {_issue_str(gl_issue)}",
                         pb.console,
                     )
@@ -356,7 +362,7 @@ class Migrator:
                 try:
                     if self._issue_exists(gl_issue):
                         skipped_count += 1
-                        messages.warning(
+                        self.messages.warning(
                             f"Skipping already migrated issue: {_issue_str(gl_issue)}",
                             pb.console,
                         )
@@ -370,7 +376,7 @@ class Migrator:
 
                 except Exception as ex:
                     failed_count += 1
-                    messages.error(
+                    self.messages.error(
                         f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}",
                         pb.console,
                     )
@@ -378,12 +384,14 @@ class Migrator:
 
                 migrated_count += 1
 
-        messages.info(
+        self.messages.info(
             f"Finished processing {issues.total} issues: {migrated_count} migrated, "
             f"{skipped_count} skipped, {failed_count} failed."
         )
         if self._unknown_users:
-            messages.warning(f"Unkown users: {', '.join(sorted(self._unknown_users))}")
+            self.messages.warning(
+                f"Unkown users: {', '.join(sorted(self._unknown_users))}"
+            )
 
     def _issue_exists(self, gl_issue: ProjectIssue) -> bool:
         """Report whether an GitLab issue exists on GitHub."""
@@ -454,7 +462,7 @@ class Migrator:
             try:
                 self._migrate_note(gl_issue, gh_issue, gl_note)
             except Exception as ex:
-                messages.error(
+                self.messages.error(
                     f"Failed to migrate note #{gl_note.get_id()} "
                     f"for issue {_issue_str(gl_issue)}: {ex}",
                     pb.console,
@@ -498,7 +506,7 @@ class Migrator:
         if username in self.user_mapping:
             display = "@" + self.user_mapping[username]
         else:
-            # messages.warning(f"No mapping found for GL user: {username}")
+            # self.messages.warning(f"No mapping found for GL user: {username}")
             display = author.get("name") or "?"
             self._unknown_users.add(username)
 
@@ -537,6 +545,7 @@ class Migrator:
                 str(self.gl_project.encoded_id),
                 rel_url,
                 self.gitlab_token,
+                self.messages,
             )
             if not data:
                 return text
@@ -589,7 +598,7 @@ class Migrator:
 
 
 def _download_embedded_file_from_gitlab(
-    host_url: str, project_id: str, rel_url: str, token: str
+    host_url: str, project_id: str, rel_url: str, token: str, messages: Messages
 ) -> bytes:
     """Download an embedded file from GitLab and return it.
 
@@ -600,7 +609,7 @@ def _download_embedded_file_from_gitlab(
     headers = {"PRIVATE-TOKEN": token}
     time.sleep(0.2)  # rate limit is 500 / minute
     response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)  # type: ignore
-    # messages.debug(
+    # self.messages.debug(
     #     f"GitLab file download: GET {url} {response.status_code} {response.headers}"
     # )
     if not response.ok:
@@ -612,7 +621,7 @@ def _download_embedded_file_from_gitlab(
 
     image = response.content
     # mime_type = response.headers.get("Content-Type", "").split(";")[0].strip()
-    # messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
+    # self.messages.notice(f"Downloaded file from GitLab: {filename} {mime_type}")
     return image
 
 
@@ -621,10 +630,10 @@ def _upload_file_to_vercel(path: PurePath, data: bytes, token: str) -> str:
     response = vercel_blob.put(
         path=str(path), data=data, timeout=REQUEST_TIMEOUT, options=options
     )
-    # messages.debug(f"Vercel file upload: {path} {response}")
+    # self.messages.debug(f"Vercel file upload: {path} {response}")
     url = response.get("url") or ""
     # if url:
-    # messages.notice(f"Uploaded file to vercel: {url}")
+    # self.messages.notice(f"Uploaded file to vercel: {url}")
     return url
 
 
