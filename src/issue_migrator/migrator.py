@@ -20,10 +20,10 @@ from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 from rich import progress
-from rich.console import Console
-from rich.logging import RichHandler
 
 from . import messages
+
+logging.getLogger("github").setLevel(logging.WARNING)  # silence github debug logs
 
 REQUEST_TIMEOUT = 10  # seconds
 LABEL_MIGRATED = "source: gitlab"
@@ -224,15 +224,17 @@ class Migrator:
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
             progress.BarColumn(),
-            progress.TextColumn("{task.completed} / {task.total}"),
-            progress.TimeRemainingColumn(),
+            progress.MofNCompleteColumn(),
+            progress.TextColumn("{task.fields[current]}"),
             transient=True,
         ) as pb:
-            _configure_logging(pb.console)
             task = pb.add_task(
-                "Validating user mappings...", total=len(self.user_mapping)
+                "Validating user mappings", total=len(self.user_mapping), current=""
             )
             for gl_username, gh_username in self.user_mapping.items():
+                current = f"{gl_username} -> {gh_username}"
+                pb.update(task, advance=1, current=current)
+
                 # gitlab user
                 gl_users = self.gl.users.list(username=gl_username, get_all=True)
                 if len(gl_users) == 0:
@@ -256,8 +258,6 @@ class Migrator:
                     messages.error(
                         f"Unknown GitHub username: {gh_username}", pb.console
                     )
-
-                pb.advance(task)
 
         if ok:
             messages.success("user mapping are valid")
@@ -287,16 +287,24 @@ class Migrator:
         if self.is_dry_run:
             return
 
-        for name in progress.track(
-            missing_names,
-            description="Creating missing labels...",
+        with progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.MofNCompleteColumn(),
+            progress.TextColumn("{task.fields[current]}"),
             transient=True,
-        ):
-            self.gh_repo.create_label(
-                name,
-                random.choice(GITHUB_LABEL_COLORS),
-                description=gl_labels[name],
+        ) as pb:
+            task = pb.add_task(
+                "Creating missing labels", total=len(missing_names), current=""
             )
+            for name in missing_names:
+                pb.update(task, advance=1, current=name)
+                self.gh_repo.create_label(
+                    name,
+                    random.choice(GITHUB_LABEL_COLORS),
+                    description=gl_labels[name],
+                )
 
         total = len(missing_names)
         messages.success(f"Created {total} missing labels")
@@ -328,20 +336,21 @@ class Migrator:
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
             progress.BarColumn(),
-            progress.TextColumn("{task.completed} / {task.total}"),
-            progress.TimeRemainingColumn(),
+            progress.MofNCompleteColumn(),
+            progress.TextColumn("{task.fields[current]}"),
             transient=True,
         ) as pb:
-            _configure_logging(pb.console)
-            task = pb.add_task("Migrating issues...", total=issues.total)
+            task = pb.add_task("Migrating issues", total=issues.total, current="")
             for gl_issue in issues:
+                current = f"{_issue_str(gl_issue)}: {gl_issue.title}"
+                pb.update(task, advance=1, current=current)
+
                 if _issue_ids and gl_issue.iid not in _issue_ids:
                     skipped_count += 1
                     messages.notice(
                         f"Skipping not included issue: {_issue_str(gl_issue)}",
                         pb.console,
                     )
-                    pb.advance(task)
                     continue
 
                 try:
@@ -351,7 +360,6 @@ class Migrator:
                             f"Skipping already migrated issue: {_issue_str(gl_issue)}",
                             pb.console,
                         )
-                        pb.advance(task)
                         continue
 
                     self._migrate_issue(
@@ -366,10 +374,8 @@ class Migrator:
                         f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}",
                         pb.console,
                     )
-                    pb.advance(task)
                     continue
 
-                pb.advance(task)
                 migrated_count += 1
 
         messages.info(
@@ -580,17 +586,6 @@ class Migrator:
             return f"{mention}{trailing_punctuation}"
 
         return re.sub(pattern, replace, text)
-
-
-def _configure_logging(console: Console):
-    """Configure logging to log into console."""
-    logging.basicConfig(
-        level=LOG_LEVEL,
-        format=LOG_FORMAT,
-        datefmt="[%X]",
-        handlers=[RichHandler(console=console, rich_tracebacks=True)],
-        force=True,
-    )
 
 
 def _download_embedded_file_from_gitlab(
