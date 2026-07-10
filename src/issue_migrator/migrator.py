@@ -111,11 +111,6 @@ class Migrator:
         gitlab_repo_name: str,
         gitlab_token: str,
         is_dry_run: bool,
-        issue_ids: List[int],
-        no_close_issues: bool,
-        no_labels: bool,
-        no_migration: bool,
-        no_user_validation: bool,
         user_mapping: Dict[str, str],
         vercel_blob_token: str,
     ):
@@ -125,11 +120,6 @@ class Migrator:
         self.gitlab_repo_name = gitlab_repo_name
         self.gitlab_token = gitlab_token
         self.is_dry_run = is_dry_run
-        self.issue_ids = set(issue_ids or [])
-        self.no_close_issues = no_close_issues
-        self.no_labels = no_labels
-        self.no_migration = no_migration
-        self.no_user_validation = no_user_validation
         self.user_mapping = user_mapping
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
@@ -220,20 +210,9 @@ class Migrator:
         self._gh.close()  # closes the GH connection
         self._gh = None
 
-    def run(self):
-        if not self._validate_user_mappings():
-            raise MigrationError("Some user mappings are not valid")
-
-        self._sync_labels()
-        self._migrate_issues()
-
-    def _validate_user_mappings(self) -> bool:
+    def validate_user_mappings(self) -> bool:
         """Validates usernames in mapping against GitLab and GitHub server
         and reports whether they are valid."""
-
-        if self.no_user_validation:
-            messages.notice("Skipped user validation")
-            return True
 
         if not self.user_mapping:
             messages.notice("No user mapping defined")
@@ -307,12 +286,8 @@ class Migrator:
 
         return gh_ok and gl_ok
 
-    def _sync_labels(self):
+    def sync_labels(self):
         """Check for missing labels in GitHub repo and add them when missing."""
-        if self.no_labels:
-            messages.notice("User requested to skip label sync")
-            return
-
         gh_labels = {x.name for x in self.gh_repo.get_labels()}
         # messages.notice(f"GH labels: {', '.join(sorted(gh_labels))}")
 
@@ -351,13 +326,14 @@ class Migrator:
 
         messages.success("Created missing labels")
 
-    def _migrate_issues(self):
+    def migrate_issues(
+        self,
+        issue_ids: Optional[List[int]] = None,
+        no_close_issues: bool = False,
+    ):
         """Migrate all issues of a project."""
 
-        if self.no_migration:
-            messages.notice("User requested to skip migration")
-            return
-
+        _issue_ids = set(issue_ids or [])
         issues = self.gl_project.issues.list(
             state="opened",
             order_by="created_at",
@@ -365,7 +341,7 @@ class Migrator:
             iterator=True,
         )
         if not issues.total:
-            messages.warning("Found no issues to migrate")
+            messages.info("Found no issues to migrate")
             return
 
         migrated_count = 0
@@ -384,7 +360,7 @@ class Migrator:
             _configure_logging(pb.console)
             task = pb.add_task("Migrating issues...", total=issues.total)
             for gl_issue in issues:
-                if self.issue_ids and gl_issue.iid not in self.issue_ids:
+                if _issue_ids and gl_issue.iid not in _issue_ids:
                     skipped_count += 1
                     messages.notice(
                         f"Skipping not included issue: {_issue_str(gl_issue)}",
@@ -403,7 +379,11 @@ class Migrator:
                         pb.advance(task)
                         continue
 
-                    self._migrate_issue(gl_issue, pb)
+                    self._migrate_issue(
+                        gl_issue=gl_issue,
+                        pb=pb,
+                        no_close_issues=no_close_issues,
+                    )
 
                 except Exception as ex:
                     failed_count += 1
@@ -431,7 +411,12 @@ class Migrator:
         found_issues = self.gh.search_issues(query)
         return found_issues.totalCount > 0
 
-    def _migrate_issue(self, gl_issue: ProjectIssue, pb: progress.Progress):
+    def _migrate_issue(
+        self,
+        gl_issue: ProjectIssue,
+        pb: progress.Progress,
+        no_close_issues: bool = False,
+    ):
         """Migrate an issue."""
         author = self._map_author(gl_issue.author)
         orig_labels = ", ".join(sorted(gl_issue.labels))
@@ -494,7 +479,7 @@ class Migrator:
                     pb.console,
                 )
 
-        if gh_issue and not self.no_close_issues:
+        if gh_issue and not no_close_issues:
             migration_note = (
                 "📦 **Issue Transferred**\n\n"
                 "This issue has been moved to a new repository: "

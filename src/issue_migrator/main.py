@@ -137,11 +137,6 @@ def main_cli():
         gitlab_repo_name=options.gitlab_repo_name,
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
-        issue_ids=options.issue_id,
-        no_close_issues=options.no_close_issues,
-        no_migration=options.no_migration,
-        no_labels=options.no_labels,
-        no_user_validation=options.no_user_validation,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
     ) as m:
@@ -154,7 +149,25 @@ def main_cli():
             sys.exit(1)
 
         try:
-            m.run()
+            if options.no_user_validation:
+                messages.notice("Skipped user validation as requested")
+            else:
+                if not m.validate_user_mappings():
+                    messages.critical("Some user mappings are invalid")
+                    sys.exit(1)
+
+            if options.no_labels:
+                messages.notice("Skipped label sync as requested")
+            else:
+                m.sync_labels()
+
+            if options.no_migration:
+                messages.notice("User requested to skip migration")
+            else:
+                m.migrate_issues(
+                    issue_ids=options.issue_id,
+                    no_close_issues=options.no_close_issues,
+                )
 
         except MigrationError as ex:
             messages.critical(ex.message)
