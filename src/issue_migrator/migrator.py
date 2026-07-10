@@ -20,6 +20,7 @@ from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 from rich import progress
+from rich.console import Console
 
 from .messages import Messages
 
@@ -113,21 +114,25 @@ class Migrator:
         gitlab_host: str,
         gitlab_repo_name: str,
         gitlab_token: str,
-        is_dry_run: bool,
-        messages: Messages,
-        no_color: bool,
-        user_mapping: Dict[str, str],
         vercel_blob_token: str,
+        user_mapping: Optional[Dict[str, str]] = None,
+        is_dry_run: Optional[bool] = False,
+        no_color: Optional[bool] = False,
     ):
+        if no_color:
+            self.console = Console(color_system=None)
+        else:
+            self.console = Console()
+
         self.github_repo_name = github_repo_name
         self.github_token = github_token
         self.gitlab_host = gitlab_host
         self.gitlab_repo_name = gitlab_repo_name
         self.gitlab_token = gitlab_token
         self.is_dry_run = is_dry_run
-        self.messages = messages
+        self.messages = Messages(console=self.console)
         self.no_color = no_color
-        self.user_mapping = user_mapping
+        self.user_mapping = user_mapping or {}
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
@@ -233,6 +238,7 @@ class Migrator:
             progress.MofNCompleteColumn(),
             progress.TextColumn("{task.fields[current]}"),
             transient=True,
+            console=self.console,
         ) as pb:
             task = pb.add_task(
                 "Validating user mappings", total=len(self.user_mapping), current=""
@@ -302,6 +308,7 @@ class Migrator:
             progress.MofNCompleteColumn(),
             progress.TextColumn("{task.fields[current]}"),
             transient=True,
+            console=self.console,
         ) as pb:
             task = pb.add_task(
                 "Creating missing labels", total=len(missing_names), current=""
@@ -348,10 +355,11 @@ class Migrator:
             progress.MofNCompleteColumn(),
             progress.TextColumn("{task.fields[current]}"),
             transient=True,
+            console=self.console,
         ) as pb:
             task = pb.add_task("Migrating issues", total=issues.total, current="")
             for gl_issue in issues:
-                current = f"{_issue_str(gl_issue)}: {gl_issue.title}"
+                current = f"#{gl_issue.encoded_id}: {gl_issue.title}"
                 pb.update(task, current=current)
 
                 if _issue_ids and gl_issue.iid not in _issue_ids:

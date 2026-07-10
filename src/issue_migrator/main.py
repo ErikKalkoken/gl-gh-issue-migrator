@@ -5,6 +5,7 @@ import sys
 
 import configargparse
 import yaml
+from rich.console import Console
 
 from issue_migrator.migrator import MigrationError, Migrator
 
@@ -131,7 +132,11 @@ def main_cli():
         print(parser.format_values())
         return
 
-    messages = Messages()
+    if options.no_color:
+        console = Console(color_system=None)
+    else:
+        console = Console()
+    messages = Messages(console=console)
 
     with Migrator(
         github_repo_name=options.github_repo_name,
@@ -140,7 +145,6 @@ def main_cli():
         gitlab_repo_name=options.gitlab_repo_name,
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
-        messages=messages,
         no_color=options.no_color,
         user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
@@ -151,6 +155,10 @@ def main_cli():
 
         except MigrationError as ex:
             messages.critical(ex.message)
+            sys.exit(1)
+
+        except KeyboardInterrupt:
+            messages.critical("Aborted by user")
             sys.exit(1)
 
         try:
@@ -173,6 +181,10 @@ def main_cli():
                     issue_ids=options.issue_id,
                     no_close_issues=options.no_close_issues,
                 )
+
+        except KeyboardInterrupt:
+            messages.critical("Aborted by user")
+            sys.exit(1)
 
         except MigrationError as ex:
             messages.critical(ex.message)

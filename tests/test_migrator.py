@@ -7,7 +7,6 @@ import pook
 from gitlab.v4.objects import Project
 
 from issue_migrator.main import GITLAB_PUBLIC_HOST
-from issue_migrator.messages import Messages
 from issue_migrator.migrator import (
     REQUEST_TIMEOUT,
     Migrator,
@@ -26,11 +25,8 @@ def create_migrator(**kwargs):
         "gitlab_host": GITLAB_PUBLIC_HOST,
         "gitlab_repo_name": "ErikKalkoken/gitlab-repo",
         "gitlab_token": "gitlab_token",
-        "is_dry_run": False,
-        "messages": mock.MagicMock(spec=Messages),
-        "no_color": False,
-        "user_mapping": {},
         "vercel_blob_token": "vercel_blob_token",
+        "user_mapping": {},
     }
     params.update(kwargs)
     m = Migrator(**params)
