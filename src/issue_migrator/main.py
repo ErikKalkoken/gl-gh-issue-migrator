@@ -162,7 +162,7 @@ def main_cli():
                 m.sync_labels()
 
             if options.no_migration:
-                messages.notice("User requested to skip migration")
+                messages.notice("Skipped migration as requested")
             else:
                 m.migrate_issues(
                     issue_ids=options.issue_id,

@@ -218,73 +218,50 @@ class Migrator:
             messages.notice("No user mapping defined")
             return True
 
-        gl_ok = True
+        ok = True
         with progress.Progress(
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
             progress.BarColumn(),
-            progress.TaskProgressColumn(),
+            progress.TextColumn("{task.completed} / {task.total}"),
             progress.TimeRemainingColumn(),
             transient=True,
         ) as pb:
             _configure_logging(pb.console)
             task = pb.add_task(
-                "Validating GitLab users...", total=len(self.user_mapping.keys())
+                "Validating user mappings...", total=len(self.user_mapping)
             )
-            for username in self.user_mapping.keys():
-                users = self.gl.users.list(username=username, get_all=True)
-                if len(users) == 0:
-                    gl_ok = False
-                    messages.error(f"Unknown GitLab username: {username}", pb.console)
-                    pb.advance(task)
-                    continue
+            for gl_username, gh_username in self.user_mapping.items():
+                # gitlab user
+                gl_users = self.gl.users.list(username=gl_username, get_all=True)
+                if len(gl_users) == 0:
+                    ok = False
+                    messages.error(
+                        f"Unknown GitLab username: {gl_username}", pb.console
+                    )
 
-                pb.advance(task)
-
-        if gl_ok:
-            messages.success("GitLab usernames are valid")
-        else:
-            messages.notice("Completed validating GitLab usernames")
-
-        gh_ok = True
-        with progress.Progress(
-            progress.SpinnerColumn(),
-            progress.TextColumn("[progress.description]{task.description}"),
-            progress.BarColumn(),
-            progress.TaskProgressColumn(),
-            progress.TimeRemainingColumn(),
-            transient=True,
-        ) as pb:
-            _configure_logging(pb.console)
-            task = pb.add_task(
-                "Validating GitHub users...", total=len(self.user_mapping.values())
-            )
-            for username in self.user_mapping.values():
-                query = f"user:{username}"
+                # github user
+                query = f"user:{gh_username}"
                 try:
                     result = self.gh.search_users(query)
                     if result.totalCount == 0:
-                        gh_ok = False
+                        ok = False
                         messages.error(
-                            f"Unknown GitHub username: {username}", pb.console
+                            f"Unknown GitHub username: {gh_username}", pb.console
                         )
-                        pb.advance(task)
-                        continue
 
                 except GithubException:
-                    gh_ok = False
-                    messages.error(f"Unknown GitHub username: {username}", pb.console)
-                    pb.advance(task)
-                    continue
+                    ok = False
+                    messages.error(
+                        f"Unknown GitHub username: {gh_username}", pb.console
+                    )
 
                 pb.advance(task)
 
-        if gh_ok:
-            messages.success("GitHub usernames are valid")
-        else:
-            messages.notice("Completed validating GitHub usernames")
+        if ok:
+            messages.success("user mapping are valid")
 
-        return gh_ok and gl_ok
+        return ok
 
     def sync_labels(self):
         """Check for missing labels in GitHub repo and add them when missing."""
