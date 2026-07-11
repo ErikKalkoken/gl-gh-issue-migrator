@@ -5,7 +5,7 @@ import sys
 
 import configargparse
 import yaml
-import yaml.parser
+from platformdirs import user_cache_dir
 from rich.console import Console
 
 from issue_migrator.migrator import MigrationError, Migrator
@@ -33,6 +33,11 @@ def _define_args() -> configargparse.ArgumentParser:
     parser.add_argument(
         "github_repo_name",
         help="Name of the GitHub repository, e.g. ErikKalkoken/aa-structures",
+    )
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Clears the cache",
     )
     parser.add_argument(
         "--dry-run",
@@ -69,11 +74,10 @@ def _define_args() -> configargparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--find-users",
+        "--find-mappings",
         action="store_true",
-        help="When set will try to find unknown users on GitHub",
+        help="When set will try to find mappings for unknown users",
     )
-
     parser.add_argument(
         "--no-close-issues",
         action="store_true",
@@ -101,11 +105,6 @@ def _define_args() -> configargparse.ArgumentParser:
         "--show-config",
         action="store_true",
         help="Show effective config and exit (requires valid config).",
-    )
-    parser.add_argument(
-        "--no-user-validation",
-        action="store_true",
-        help="When set will skip validating users mappings.",
     )
     parser.add_argument(
         "--user-mapping",
@@ -149,7 +148,13 @@ def main_cli():
         console = Console()
     messages = Messages(console=console)
 
+    cache_directory = user_cache_dir(
+        appname="IssueMigrator", appauthor="ErikKalkoken", ensure_exists=True
+    )
+    # messages.debug(f"Cache directory is {cache_directory}")
+
     with Migrator(
+        cache_directory=cache_directory,
         github_repo_name=options.github_repo_name,
         github_token=options.github_token,
         gitlab_host=options.gitlab_host,
@@ -157,9 +162,11 @@ def main_cli():
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
         no_color=options.no_color,
-        user_mapping=dict(options.user_mapping),
         vercel_blob_token=options.vercel_blob_token,
     ) as m:
+
+        if options.clear_cache:
+            m.clear_cache()
 
         try:
             m.connect()
@@ -173,12 +180,9 @@ def main_cli():
             sys.exit(1)
 
         try:
-            if options.no_user_validation:
-                messages.notice("Skipped user validation as requested")
-            else:
-                if not m.validate_user_mappings():
-                    messages.critical("Some user mappings are invalid")
-                    sys.exit(1)
+            if not m.load_user_mappings(dict(options.user_mapping)):
+                messages.critical("Some user mappings are invalid")
+                sys.exit(1)
 
             if options.no_labels:
                 messages.notice("Skipped label sync as requested")
@@ -193,8 +197,8 @@ def main_cli():
                     no_close_issues=options.no_close_issues,
                 )
 
-            if options.find_users:
-                m.find_github_users()
+            if options.find_mappings:
+                m.find_user_mappings()
 
         except KeyboardInterrupt:
             messages.critical("Aborted by user")

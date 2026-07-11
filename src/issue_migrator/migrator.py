@@ -1,3 +1,5 @@
+"""Issue migration."""
+
 import logging
 import random
 import re
@@ -9,6 +11,7 @@ from typing import Dict, List, Optional, Set
 import gitlab
 import requests
 import vercel_blob
+from diskcache import Cache
 from github import Auth, Github
 from github.GithubException import (
     BadCredentialsException,
@@ -27,6 +30,7 @@ from .messages import Messages
 logging.getLogger("github").setLevel(logging.WARNING)  # silence github debug logs
 
 REQUEST_TIMEOUT = 10  # seconds
+CACHE_TIMEOUT = 3600 * 6  # seconds
 LABEL_MIGRATED = "source: gitlab"
 MIGRATED_LABEL_DESCRIPTION = "This label was migrated from GitLab"
 LOG_LEVEL = "WARN"
@@ -115,7 +119,8 @@ class Migrator:
         gitlab_repo_name: str,
         gitlab_token: str,
         vercel_blob_token: str,
-        user_mapping: Optional[Dict[str, str]] = None,
+        cache_directory: Optional[str] = None,
+        cache: Optional[Cache] = None,
         is_dry_run: Optional[bool] = False,
         no_color: Optional[bool] = False,
     ):
@@ -132,13 +137,21 @@ class Migrator:
         self.is_dry_run = is_dry_run
         self.messages = Messages(console=self.console)
         self.no_color = no_color
-        self.user_mapping = user_mapping or {}
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
         self._gh_repo: Optional[Repository] = None
         self._gh: Optional[Github] = None
         self._unknown_users: Set[str] = set()
+
+        if cache_directory:
+            user_mapping = Cache(directory=cache_directory)
+        elif cache:
+            user_mapping = cache
+        else:
+            user_mapping = Cache(directory=".")
+
+        self.user_mapping = user_mapping
 
     def __enter__(self):
         return self
@@ -150,24 +163,28 @@ class Migrator:
 
     @property
     def gl(self) -> gitlab.Gitlab:
+        """Return a valid gitlab instance or raise error."""
         if self._gl is None:
             raise RuntimeError("Not connected")
         return self._gl
 
     @property
     def gl_project(self) -> Project:
+        """Return a valid gitlab project or raise error."""
         if self._gl_project is None:
             raise RuntimeError("Not connected")
         return self._gl_project
 
     @property
     def gh(self) -> Github:
+        """Return a valid github instance or raise error."""
         if self._gh is None:
             raise RuntimeError("Not connected")
         return self._gh
 
     @property
     def gh_repo(self) -> Repository:
+        """Return a valid github project or raise error."""
         if self._gh_repo is None:
             raise RuntimeError("Not connected")
         return self._gh_repo
@@ -216,21 +233,27 @@ class Migrator:
         )
 
     def close(self):
-        if not self._gh:
-            return
+        """Close all open connections."""
+        self.user_mapping.close()
 
-        self._gh.close()  # closes the GH connection
-        self._gh = None
+        if self._gh:
+            self._gh.close()  # closes the GH connection
+            self._gh = None
 
-    def validate_user_mappings(self) -> bool:
-        """Validates usernames in mapping against GitLab and GitHub server
+    def clear_cache(self):
+        """Clear all caches."""
+        self.user_mapping.clear()
+        self.messages.notice("Cache cleared")
+
+    def load_user_mappings(self, user_mapping: Dict[str, str]) -> bool:
+        """Loads mapping between GitLab and GitHub users into cache
         and reports whether they are valid."""
 
-        if not self.user_mapping:
-            self.messages.notice("No user mapping defined")
+        if not user_mapping:
+            self.messages.notice("No user mapping provided")
             return True
 
-        ok = True
+        ok_all = True
         with progress.Progress(
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
@@ -241,30 +264,43 @@ class Migrator:
             console=self.console,
         ) as pb:
             task = pb.add_task(
-                "Validating user mappings", total=len(self.user_mapping), current=""
+                "Load user mappings", total=len(user_mapping), current=""
             )
-            for gl_username, gh_username in self.user_mapping.items():
+            for gl_username, gh_username in user_mapping.items():
+                ok = True
                 current = f"{gl_username} -> {gh_username}"
                 pb.update(task, current=current)
 
-                if not self._gitlab_user_exists(gl_username):
-                    ok = False
-                    self.messages.error(
-                        f"Unknown GitLab username: {gl_username}", pb.console
-                    )
+                name = self.user_mapping.get(gl_username)
+                if not name or name != gh_username:
+                    if not self._gitlab_user_exists(gl_username):
+                        ok_all = ok = False
+                        self.messages.warning(
+                            f"Unknown GitLab username: {gl_username}", pb.console
+                        )
 
-                if not self._github_user_exists(gh_username):
-                    ok = False
-                    self.messages.error(
-                        f"Unknown GitHub username: {gh_username}", pb.console
-                    )
+                    if not self._github_user_exists(gh_username):
+                        ok_all = ok = False
+                        self.messages.warning(
+                            f"Unknown GitHub username: {gh_username}", pb.console
+                        )
+
+                    if ok:
+                        self.user_mapping.set(
+                            key=gl_username, value=gh_username, expire=CACHE_TIMEOUT
+                        )
+                    else:
+                        self.messages.error(
+                            f"Invalid mapping: {gl_username} -> {gh_username}",
+                            pb.console,
+                        )
 
                 pb.advance(task)
 
-        if ok:
-            self.messages.success("user mapping are valid")
+        if ok_all:
+            self.messages.notice("User mappings loaded")
 
-        return ok
+        return ok_all
 
     def _gitlab_user_exists(self, gl_username) -> bool:
         gl_users = self.gl.users.list(username=gl_username, get_all=True)
@@ -285,7 +321,11 @@ class Migrator:
 
         return True
 
-    def find_github_users(self):
+    def find_user_mappings(self):
+        """Find user mappings for unknown users.
+
+        Will try to find users on GitHub with the same username as on GitLab.
+        """
         if not self._unknown_users:
             return
 
@@ -304,9 +344,11 @@ class Migrator:
             for username in self._unknown_users:
                 pb.update(task, current=username)
                 if not self._github_user_exists(username):
-                    self.messages.error(f"Not a username: {username}", pb.console)
+                    self.messages.error(f"No mapping found: {username}", pb.console)
                 else:
-                    self.messages.success(f"Found username: {username}", pb.console)
+                    self.messages.success(
+                        f"Found mapping: {username}: {username},", pb.console
+                    )
 
                 pb.advance(task)
 
@@ -325,7 +367,7 @@ class Migrator:
 
         missing_names = set(gl_labels.keys()) - gh_label_names
         if not missing_names:
-            self.messages.notice("Labels are in sync")
+            self.messages.info("Labels are in sync")
             return
 
         _names = '"' + '", "'.join(sorted(missing_names)) + '"'
@@ -549,13 +591,14 @@ class Migrator:
             gh_issue.create_comment(body=formatted_comment)
 
     def _map_author(self, author):
-        username = author.get("username")
-        if username in self.user_mapping:
-            display = "@" + self.user_mapping[username]
-        else:
+        gl_username = author.get("username")
+        try:
+            gh_username = self.user_mapping[gl_username]
+            display = f"@{gh_username}"
+        except KeyError:
             # self.messages.warning(f"No mapping found for GL user: {username}")
             display = author.get("name") or "?"
-            self._unknown_users.add(username)
+            self._unknown_users.add(gl_username)
 
         return display
 
@@ -617,21 +660,21 @@ class Migrator:
                 return match.group(0)
 
             # Group 3 matched the user mention
-            username = match.group(3)
+            gl_username = match.group(3)
 
             # Gitlab usernames cannot end in standard punctuation.
             # If a trailing period/comma/exclamation was caught, separate it.
             trailing_punctuation = ""
-            while username and username[-1] in ".,!?":
-                trailing_punctuation = username[-1] + trailing_punctuation
-                username = username[:-1]
+            while gl_username and gl_username[-1] in ".,!?":
+                trailing_punctuation = gl_username[-1] + trailing_punctuation
+                gl_username = gl_username[:-1]
 
-            if username in self.user_mapping:
-                mention = "@" + self.user_mapping[username]
-
-            else:
-                mention = "@\u200b" + username  # disables the mention
-                self._unknown_users.add(username)
+            try:
+                gh_username = self.user_mapping[gl_username]
+                mention = f"@{gh_username}"
+            except KeyError:
+                mention = "@\u200b" + gl_username  # disables the mention
+                self._unknown_users.add(gl_username)
 
             return f"{mention}{trailing_punctuation}"
 

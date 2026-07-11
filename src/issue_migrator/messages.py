@@ -1,3 +1,5 @@
+"""User messages."""
+
 import enum
 from typing import Optional
 
@@ -5,6 +7,8 @@ from rich.console import Console
 
 
 class Messages:
+    """A class for generating user messages with semantic colors on the console."""
+
     class _Level(enum.IntEnum):
         CRITICAL = 50
         DEBUG = 10

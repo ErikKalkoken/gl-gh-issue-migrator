@@ -1,9 +1,11 @@
+import tempfile
 import unittest
 from pathlib import PurePath
 from typing import Any, Dict, NamedTuple
 from unittest import mock
 
 import pook
+from diskcache import Cache
 from gitlab.v4.objects import Project
 
 from issue_migrator.main import GITLAB_PUBLIC_HOST
@@ -26,7 +28,7 @@ def create_migrator(**kwargs):
         "gitlab_repo_name": "ErikKalkoken/gitlab-repo",
         "gitlab_token": "gitlab_token",
         "vercel_blob_token": "vercel_blob_token",
-        "user_mapping": {},
+        "cache": mock.MagicMock(spec=Cache),
     }
     params.update(kwargs)
     m = Migrator(**params)
@@ -319,12 +321,14 @@ class TestMigrateMentions(unittest.TestCase):
 
     def test_can_map_known_mentions(self):
         # given
-        input_text = "Hello @alice, welcome!"
-        m = create_migrator(user_mapping={"alice": "alice2"})
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            m = create_migrator(cache_directory=temp_dir_str)
+            m.user_mapping["alice"] = "alice2"
+            input_text = "Hello @alice, welcome!"
 
-        # when
-        got = m._migrate_mentions(input_text)
+            # when
+            got = m._migrate_mentions(input_text)
 
-        # then
-        want = "Hello @alice2, welcome!"
-        self.assertEqual(got, want)
+            # then
+            want = "Hello @alice2, welcome!"
+            self.assertEqual(got, want)

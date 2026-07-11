@@ -4,12 +4,19 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "gl-gh-issue-migrator"
-authors = [{name = "Erik Kalkoken", email = "kalkoken87@gmail.com"}]
+authors = [{ name = "Erik Kalkoken", email = "kalkoken87@gmail.com" }]
 license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version", "description"]
 dependencies = [
-    "python-gitlab","PyGithub", "vercel_blob", "ConfigArgParse", "rich", "pyyaml"
+    "python-gitlab",
+    "PyGithub",
+    "vercel_blob",
+    "ConfigArgParse",
+    "rich",
+    "pyyaml",
+    "diskcache",
+    "plattformdirs",
 ]
 
 [project.optional-dependencies]

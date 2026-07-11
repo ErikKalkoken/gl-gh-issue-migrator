@@ -13,9 +13,11 @@ A tool for migrating issues from a GitHub project to a GitLab repo.
 - Adds migration comment with link to original issue to old issue
 - Embedded files are uploaded to an external object store (i.e. vercel)
 - Users are mapping between GitLab and GitHub for mentions and assignees
-- Unknown user mentions are disabled
+- Unknown user mentions are muted
 - Rate limits from both GH and GL are respected
 - Allows configuration by file, environment variables and/or command line options
+- User mappings are validated and then cached
+- Can find mappings for unknown users
 
 ## How to use
 
