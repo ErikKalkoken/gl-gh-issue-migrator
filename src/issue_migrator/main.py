@@ -19,8 +19,8 @@ GITLAB_PUBLIC_HOST = "https://gitlab.com"
 
 def _define_args() -> configargparse.ArgumentParser:
     parser = configargparse.ArgParser(
-        default_config_files=["config.ini"],
-        config_file_parser_class=configargparse.ConfigparserConfigFileParser,
+        default_config_files=["config.yaml"],
+        config_file_parser_class=configargparse.YAMLConfigFileParser,
         description=package_doc,
         formatter_class=configargparse.ArgumentDefaultsHelpFormatter,
     )

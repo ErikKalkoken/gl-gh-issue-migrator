@@ -222,3 +222,4 @@ __marimo__/
 .env
 .vscode/
 config.ini
+config.yaml

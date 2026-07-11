@@ -1,4 +1,3 @@
-[issue-migrator]
 gitlab-token: glpat-my-token
 github-token: ghp_my_token
 vercel-blob-token: vercel_blob_rw_my-token
