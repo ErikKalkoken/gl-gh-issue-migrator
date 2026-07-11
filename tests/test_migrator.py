@@ -19,7 +19,7 @@ from issue_migrator.migrator import (
 MODULE_PATH = "issue_migrator.migrator"
 
 
-def create_migrator(**kwargs):
+def make_migrator_params(**kwargs) -> dict:
     """Return a new migrator with preset values."""
     params = {
         "github_repo_name": "ErikKalkoken/github-repo",
@@ -31,8 +31,7 @@ def create_migrator(**kwargs):
         "cache": mock.MagicMock(spec=Cache),
     }
     params.update(kwargs)
-    m = Migrator(**params)
-    return m
+    return params
 
 
 class TestRemoveImageSizes(unittest.TestCase):
@@ -117,43 +116,45 @@ class TestDownloadImageFromGitLab(unittest.TestCase):
         """Test successful image download."""
         host_url = "https://gitlab.example.com"
         token = "fake-token-123"
-        m = create_migrator(gitlab_token=token, gitlab_host=host_url)
-        gl_project = mock.MagicMock()
-        gl_project.encoded_id = "my-group%2Fmy-project"
-        m._gl_project = gl_project
-        rel_url = "images/avatar.png"
-        expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
-        fake_binary_data = b"fake-jpeg-bytes"
-        (
-            pook.get(expected_url)
-            .reply(200)
-            .header("Content-Type", "image/jpeg")
-            # No Content-Disposition header provided
-            .body(fake_binary_data)
-        )
+        params = make_migrator_params(gitlab_token=token, gitlab_host=host_url)
+        with Migrator(**params) as m:
+            gl_project = mock.MagicMock()
+            gl_project.encoded_id = "my-group%2Fmy-project"
+            m._gl_project = gl_project
+            rel_url = "images/avatar.png"
+            expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
+            fake_binary_data = b"fake-jpeg-bytes"
+            (
+                pook.get(expected_url)
+                .reply(200)
+                .header("Content-Type", "image/jpeg")
+                # No Content-Disposition header provided
+                .body(fake_binary_data)
+            )
 
-        result = m._download_embedded_file_from_gitlab(rel_url)
+            result = m._download_embedded_file_from_gitlab(rel_url)
 
-        self.assertEqual(result, fake_binary_data)
+            self.assertEqual(result, fake_binary_data)
 
     @pook.on
     def test_download_image_failure(self):
         """Test that the function returns None and logs error when GitLab returns non-200."""
         host_url = "https://gitlab.example.com"
         token = "fake-token-123"
-        m = create_migrator(gitlab_token=token, gitlab_host=host_url)
-        gl_project = mock.MagicMock()
-        gl_project.encoded_id = "my-group%2Fmy-project"
-        m._gl_project = gl_project
-        rel_url = "images/avatar.png"
-        expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
+        params = make_migrator_params(gitlab_token=token, gitlab_host=host_url)
+        with Migrator(**params) as m:
+            gl_project = mock.MagicMock()
+            gl_project.encoded_id = "my-group%2Fmy-project"
+            m._gl_project = gl_project
+            rel_url = "images/avatar.png"
+            expected_url = "https://gitlab.example.com/-/project/my-group%2Fmy-project/images/avatar.png"
 
-        (pook.get(expected_url).reply(404).body("Not Found"))
+            (pook.get(expected_url).reply(404).body("Not Found"))
 
-        result = m._download_embedded_file_from_gitlab(rel_url)
+            result = m._download_embedded_file_from_gitlab(rel_url)
 
-        # Assert that it gracefully handled the failure and returned empty
-        self.assertFalse(result)
+            # Assert that it gracefully handled the failure and returned empty
+            self.assertFalse(result)
 
 
 class TestUploadFileToVercel(unittest.TestCase):
@@ -261,11 +262,12 @@ class TestMigrator_MigrateEmbeddedFiles(unittest.TestCase):
                     download.return_value = "image".encode("utf-8")
                     upload.return_value = new_url
 
-                    m = create_migrator()
-                    m._gl_project = mock.MagicMock(spec=Project)
+                    params = make_migrator_params()
+                    with Migrator(**params) as m:
+                        m._gl_project = mock.MagicMock(spec=Project)
 
-                    result = m._migrate_embedded_files(input_desc, "1")
-                    self.assertEqual(result, expected)
+                        result = m._migrate_embedded_files(input_desc, "1")
+                        self.assertEqual(result, expected)
 
 
 class TestMigrateMentions(unittest.TestCase):
@@ -309,26 +311,28 @@ class TestMigrateMentions(unittest.TestCase):
             ),
         ]
 
-        m = create_migrator()
-        for description, input_text, expected in test_cases:
-            with self.subTest(msg=description):
-                actual = m._migrate_mentions(input_text)
-                self.assertEqual(
-                    actual,
-                    expected,
-                    f"\nFailed on: '{description}'\nExpected: {expected}\nGot: {actual}",
-                )
+        params = make_migrator_params()
+        with Migrator(**params) as m:
+            for description, input_text, expected in test_cases:
+                with self.subTest(msg=description):
+                    actual = m._migrate_mentions(input_text)
+                    self.assertEqual(
+                        actual,
+                        expected,
+                        f"\nFailed on: '{description}'\nExpected: {expected}\nGot: {actual}",
+                    )
 
     def test_can_map_known_mentions(self):
         # given
         with tempfile.TemporaryDirectory() as temp_dir_str:
-            m = create_migrator(cache_directory=temp_dir_str)
-            m.user_mapping["alice"] = "alice2"
-            input_text = "Hello @alice, welcome!"
+            params = make_migrator_params(cache_directory=temp_dir_str)
+            with Migrator(**params) as m:
+                m.user_mapping["alice"] = "alice2"
+                input_text = "Hello @alice, welcome!"
 
-            # when
-            got = m._migrate_mentions(input_text)
+                # when
+                got = m._migrate_mentions(input_text)
 
-            # then
-            want = "Hello @alice2, welcome!"
-            self.assertEqual(got, want)
+                # then
+                want = "Hello @alice2, welcome!"
+                self.assertEqual(got, want)
