@@ -2,8 +2,7 @@
 
 A tool for migrating issues from a GitHub project to a GitLab repo.
 
-> [!WARNING]
-> This app is in development and not yet stable
+[![CI/CD Pipeline](https://github.com/ErikKalkoken/gl-gh-issue-migrator/actions/workflows/ci-cd.yaml/badge.svg)](https://github.com/ErikKalkoken/gl-gh-issue-migrator/actions/workflows/ci-cd.yaml)
 
 ## Features
 
@@ -17,13 +16,17 @@ A tool for migrating issues from a GitHub project to a GitLab repo.
 - Rate limits from both GH and GL are respected
 - Allows configuration by file, environment variables and/or command line options
 - User mappings are validated and then cached
-- Can find mappings for unknown users
+- Ability to find mappings for unknown users
+- Color output can be disabled
+- Console output can be disabled
+- Aborted issue migrations can be continued.
 
 ## How to use
 
 1. Create a bot user account on GitHub (optional but recommended)
-2. Create and store tokens for GitLab, GitHub and Vercel Blob in the config file
-3. Import GitLab project into GitHub via official import feature on web site
-4. Update user mappings
-5. Migrate issues with issue-migrator
-6. Add migration note & archive GH project
+1. Create and store tokens for GitLab, GitHub and Vercel Blob in the config file
+1. Import the GitLab project into GitHub via the official import feature on it's site
+1. Run issue-migrator on repos with `--dry-run` and `--find-mappings` to identify missing user mappings and potential issues
+1. Update user mappings in config file
+1. Run issue-migrator on repos to migrate issues
+1. Add migration note & archive GH project

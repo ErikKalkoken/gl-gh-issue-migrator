@@ -8,6 +8,18 @@ authors = [{ name = "Erik Kalkoken", email = "kalkoken87@gmail.com" }]
 license = "MIT"
 license-files = ["LICENSE"]
 dynamic = ["version", "description"]
+requires-python = ">=3.10"
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 dependencies = [
     "python-gitlab",
     "PyGithub",
@@ -16,7 +28,7 @@ dependencies = [
     "rich",
     "pyyaml",
     "diskcache",
-    "plattformdirs",
+    "platformdirs",
 ]
 
 [project.optional-dependencies]
@@ -25,8 +37,12 @@ test = ["pook", "coverage"]
 [project.urls]
 Home = "https://gitlab.com/ErikKalkoken/aa-issue-migrator"
 
+[project.scripts]
+issue-migrator = "issue_migrator.main:main_cli"
+
 [tool.flit.module]
 name = "issue_migrator"
 
-[project.scripts]
-issue-migrator = "issue_migrator.main:main_cli"
+[tool.isort]
+profile = "black"
+multi_line_output = 3

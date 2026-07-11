@@ -10,9 +10,12 @@ from gitlab.v4.objects import Project
 from rich.console import Console
 
 from issue_migrator.main import GITLAB_PUBLIC_HOST
-from issue_migrator.migrator import (REQUEST_TIMEOUT, Migrator,
-                                     _remove_image_sizes,
-                                     _upload_file_to_vercel)
+from issue_migrator.migrator import (
+    REQUEST_TIMEOUT,
+    Migrator,
+    _remove_image_sizes,
+    _upload_file_to_vercel,
+)
 
 MODULE_PATH = "issue_migrator.migrator"
 

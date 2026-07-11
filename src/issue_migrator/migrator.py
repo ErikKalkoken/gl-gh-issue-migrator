@@ -13,8 +13,11 @@ import requests
 import vercel_blob
 from diskcache import Cache
 from github import Auth, Github
-from github.GithubException import (BadCredentialsException, GithubException,
-                                    UnknownObjectException)
+from github.GithubException import (
+    BadCredentialsException,
+    GithubException,
+    UnknownObjectException,
+)
 from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
