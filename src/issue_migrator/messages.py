@@ -29,11 +29,11 @@ class Messages:
 
     def __init__(self, console: Optional[Console] = None):
         """Initialize the Messages class with an optional rich Console."""
-        self.console = console or Console()
+        self._console = console or Console()
 
     def _message(self, text: str, level: _Level, console: Optional[Console] = None):
         """Internal helper to print the styled message."""
-        active_console = console or self.console
+        active_console = console or self._console
         active_console.print(
             f"[{level.name}] {text}", style=self._STYLE.get(level), markup=False
         )

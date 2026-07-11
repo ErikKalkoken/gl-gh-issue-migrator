@@ -107,16 +107,15 @@ def _define_args() -> configargparse.ArgumentParser:
         help="Show effective config and exit (requires valid config).",
     )
     parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help=("When set will suppress most console output."),
+    )
+    parser.add_argument(
         "--user-mapping",
         type=yaml.safe_load,
         default={},
-        help=(
-            "Define mapping of user handles as JSON string. "
-            "Mapping is from Gitlab to Github, "
-            "Note that user mentions that are not defined here will be muted."
-            "e.g."
-            '{"user1_gl":"user1_gh", "ErikKalkoken":"ErikKalkoken"}'
-        ),
+        help='Define mapping of gitlab to github usernames in YAML. e.g. "{ErikKalkoken: ErikKalkoken}"',
     )
     parser.add_argument(
         "--vercel-blob-token",
@@ -136,17 +135,19 @@ def main_cli():
         print(f"Configuration error: {ex}")
         sys.exit(1)
 
-    if options.show_config:
-        print(options)
-        print("----------")
-        print(parser.format_values())
-        return
-
+    params = {}
+    if options.quiet:
+        params["quiet"] = True
     if options.no_color:
-        console = Console(color_system=None)
-    else:
-        console = Console()
+        params["color_system"] = None
+    console = Console(**params)
     messages = Messages(console=console)
+
+    if options.show_config:
+        console.print(options)
+        console.print("----------")
+        console.print(parser.format_values())
+        return
 
     cache_directory = user_cache_dir(
         appname="IssueMigrator", appauthor="ErikKalkoken", ensure_exists=True
@@ -155,13 +156,13 @@ def main_cli():
 
     with Migrator(
         cache_directory=cache_directory,
+        console=console,
         github_repo_name=options.github_repo_name,
         github_token=options.github_token,
         gitlab_host=options.gitlab_host,
         gitlab_repo_name=options.gitlab_repo_name,
         gitlab_token=options.gitlab_token,
         is_dry_run=options.dry_run,
-        no_color=options.no_color,
         vercel_blob_token=options.vercel_blob_token,
     ) as m:
 

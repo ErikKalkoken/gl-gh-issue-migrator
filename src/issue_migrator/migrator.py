@@ -13,11 +13,8 @@ import requests
 import vercel_blob
 from diskcache import Cache
 from github import Auth, Github
-from github.GithubException import (
-    BadCredentialsException,
-    GithubException,
-    UnknownObjectException,
-)
+from github.GithubException import (BadCredentialsException, GithubException,
+                                    UnknownObjectException)
 from github.Issue import Issue
 from github.Repository import Repository
 from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
@@ -122,13 +119,9 @@ class Migrator:
         cache_directory: Optional[str] = None,
         cache: Optional[Cache] = None,
         is_dry_run: Optional[bool] = False,
-        no_color: Optional[bool] = False,
+        console: Optional[Console] = None,
     ):
-        if no_color:
-            self.console = Console(color_system=None)
-        else:
-            self.console = Console()
-
+        self.console = console or Console()
         self.github_repo_name = github_repo_name
         self.github_token = github_token
         self.gitlab_host = gitlab_host
@@ -136,7 +129,6 @@ class Migrator:
         self.gitlab_token = gitlab_token
         self.is_dry_run = is_dry_run
         self.messages = Messages(console=self.console)
-        self.no_color = no_color
         self.vercel_blob_token = vercel_blob_token
         self._gl: Optional[gitlab.Gitlab] = None
         self._gl_project: Optional[Project] = None
@@ -655,7 +647,8 @@ class Migrator:
         pattern = r"(```[\s\S]*?```)|(`[^`\n]+?`)|(?<!\w)@([\w.-]+)"
 
         def replace(match):
-            # If group 1 or group 2 matched, we are inside a code block. Return it as-is.
+            # If group 1 or group 2 matched, we are inside a code block.
+            # Return it as-is.
             if match.group(1) or match.group(2):
                 return match.group(0)
 
@@ -685,7 +678,8 @@ class Migrator:
 
         Return empty when there was an error.
         """
-        url = f"{self.gitlab_host}/-/project/{self.gl_project.encoded_id}/{rel_url.lstrip('.')}"
+        rel_url_2 = rel_url.lstrip(".")
+        url = f"{self.gitlab_host}/-/project/{self.gl_project.encoded_id}/{rel_url_2}"
         filename = rel_url.split("/")[-1]
         headers = {"PRIVATE-TOKEN": self.gitlab_token}
         time.sleep(0.2)  # rate limit is 500 / minute
