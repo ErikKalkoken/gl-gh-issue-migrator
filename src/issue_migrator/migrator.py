@@ -221,7 +221,12 @@ class Migrator:
 
         try:
             auth = Auth.Token(self.github_token)
-            self._gh = Github(auth=auth)
+            self._gh = Github(  # config to reduce hitting rate limits
+                auth=auth,
+                per_page=100,
+                seconds_between_requests=0.25,
+                seconds_between_writes=1.0,
+            )
             gh_user = self._gh.get_user()
             self._gh_repo = self._gh.get_repo(self.github_repo_name)
 
@@ -281,7 +286,11 @@ class Migrator:
                 pb.update(task, current=current)
 
                 name = self.user_mapping.get(gl_username)
-                if not name or name != gh_username:
+
+                if name == gh_username:
+                    self.user_mapping.touch(key=gl_username, expire=CACHE_TIMEOUT)
+
+                else:
                     if not self._gitlab_user_exists(gl_username):
                         ok_all = ok = False
                         self.messages.warning(

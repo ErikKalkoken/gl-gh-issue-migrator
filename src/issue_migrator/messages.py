@@ -28,15 +28,36 @@ class Messages:
         Level.WARNING: "yellow",
     }
 
+    _SYMBOL = {
+        Level.CRITICAL: ("!", "[FATAL]"),
+        Level.DEBUG: ("⚙", ""),
+        Level.ERROR: ("✖", "[X]"),
+        Level.INFO: ("»", "[i]"),
+        Level.SUCCESS: ("✔", "[OK]"),
+        Level.WARNING: ("⚠", "[!]"),
+    }
+
     def __init__(self, console: Optional[Console] = None):
         """Initialize the Messages class with an optional rich Console."""
         self._console = console or Console()
+        self._supports_unicode = "utf-8" in self._console.encoding.lower()
 
     def print(self, text: str, level: Level, console: Optional[Console] = None):
         """Internal helper to print the styled message."""
         active_console = console or self._console
+
+        symbols = self._SYMBOL.get(level)
+        if not symbols:
+            symbol = ""
+        else:
+            if self._supports_unicode:
+                i = 0
+            else:
+                i = 1
+            symbol = symbols[i] + " "
+
         active_console.print(
-            f"[{level.name}] {text}", style=self._STYLE.get(level), markup=False
+            f"{symbol}{text}", style=self._STYLE.get(level), markup=False
         )
 
     def critical(self, text: str, console: Optional[Console] = None) -> None:
@@ -77,7 +98,7 @@ class MessagesLogHandler(logging.Handler):
 
     def emit(self, record):
         try:
-            match record.levelname:
+            match record.levelno:
                 case logging.DEBUG:
                     level = Messages.Level.DEBUG
                 case logging.INFO:
