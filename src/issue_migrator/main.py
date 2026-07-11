@@ -8,11 +8,10 @@ import yaml
 from platformdirs import user_cache_dir
 from rich.console import Console
 
+from issue_migrator import __doc__ as package_doc
+from issue_migrator import __version__
+from issue_migrator.messages import Messages
 from issue_migrator.migrator import MigrationError, Migrator
-
-from . import __doc__ as package_doc
-from . import __version__
-from .messages import Messages
 
 GITLAB_PUBLIC_HOST = "https://gitlab.com"
 

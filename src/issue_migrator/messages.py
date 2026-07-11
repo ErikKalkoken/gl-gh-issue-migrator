@@ -1,6 +1,7 @@
 """User messages."""
 
 import enum
+import logging
 from typing import Optional
 
 from rich.console import Console
@@ -9,7 +10,7 @@ from rich.console import Console
 class Messages:
     """A class for generating user messages with semantic colors on the console."""
 
-    class _Level(enum.IntEnum):
+    class Level(enum.IntEnum):
         CRITICAL = 50
         DEBUG = 10
         ERROR = 40
@@ -19,19 +20,19 @@ class Messages:
         WARNING = 30
 
     _STYLE = {
-        _Level.CRITICAL: "bold magenta",
-        _Level.DEBUG: "dim blue",
-        _Level.ERROR: "bold red",
-        _Level.INFO: "cyan",
-        _Level.SUCCESS: "bold green",
-        _Level.WARNING: "yellow",
+        Level.CRITICAL: "bold magenta",
+        Level.DEBUG: "dim blue",
+        Level.ERROR: "bold red",
+        Level.INFO: "cyan",
+        Level.SUCCESS: "bold green",
+        Level.WARNING: "yellow",
     }
 
     def __init__(self, console: Optional[Console] = None):
         """Initialize the Messages class with an optional rich Console."""
         self._console = console or Console()
 
-    def _message(self, text: str, level: _Level, console: Optional[Console] = None):
+    def print(self, text: str, level: Level, console: Optional[Console] = None):
         """Internal helper to print the styled message."""
         active_console = console or self._console
         active_console.print(
@@ -40,28 +41,57 @@ class Messages:
 
     def critical(self, text: str, console: Optional[Console] = None) -> None:
         """Produce a critical message."""
-        self._message(text, self._Level.CRITICAL, console)
+        self.print(text, self.Level.CRITICAL, console)
 
     def debug(self, text: str, console: Optional[Console] = None) -> None:
         """Produce a debug message."""
-        self._message(text, self._Level.DEBUG, console)
+        self.print(text, self.Level.DEBUG, console)
 
     def error(self, text: str, console: Optional[Console] = None) -> None:
         """Produce an error message."""
-        self._message(text, self._Level.ERROR, console)
+        self.print(text, self.Level.ERROR, console)
 
     def info(self, text: str, console: Optional[Console] = None) -> None:
         """Produce an info message."""
-        self._message(text, self._Level.INFO, console)
+        self.print(text, self.Level.INFO, console)
 
     def notice(self, text: str, console: Optional[Console] = None) -> None:
         """Produce a notice message."""
-        self._message(text, self._Level.NOTICE, console)
+        self.print(text, self.Level.NOTICE, console)
 
     def success(self, text: str, console: Optional[Console] = None) -> None:
         """Produce a success message."""
-        self._message(text, self._Level.SUCCESS, console)
+        self.print(text, self.Level.SUCCESS, console)
 
     def warning(self, text: str, console: Optional[Console] = None) -> None:
         """Produce a warning message."""
-        self._message(text, self._Level.WARNING, console)
+        self.print(text, self.Level.WARNING, console)
+
+
+class MessagesLogHandler(logging.Handler):
+    """A log handler for printing log records with messages."""
+
+    def __init__(self, messages: Messages, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._messages = messages
+
+    def emit(self, record):
+        try:
+            match record.levelname:
+                case logging.DEBUG:
+                    level = Messages.Level.DEBUG
+                case logging.INFO:
+                    level = Messages.Level.INFO
+                case logging.WARNING:
+                    level = Messages.Level.WARNING
+                case logging.ERROR:
+                    level = Messages.Level.ERROR
+                case logging.CRITICAL:
+                    level = Messages.Level.CRITICAL
+                case _:
+                    level = Messages.Level.NOTICE
+
+            self._messages.print(f"{record.name}: {record.msg}", level=level)
+
+        except Exception:
+            self.handleError(record)

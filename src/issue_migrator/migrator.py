@@ -26,9 +26,7 @@ from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 from rich import progress
 from rich.console import Console
 
-from .messages import Messages
-
-logging.getLogger("github").setLevel(logging.WARNING)  # silence github debug logs
+from issue_migrator.messages import Messages, MessagesLogHandler
 
 REQUEST_TIMEOUT = 10  # seconds
 CACHE_TIMEOUT = 3600 * 6  # seconds
@@ -149,6 +147,15 @@ class Migrator:
 
         self.user_mapping = user_mapping
 
+        # replace github handlers with out own
+        logger = logging.getLogger("github")
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
+
+        handler = MessagesLogHandler(messages=self.messages)
+        logger.addHandler(handler)
+
     def __enter__(self):
         return self
 
@@ -204,6 +211,9 @@ class Migrator:
                 message=f"GitLab project not found: {self.gitlab_repo_name}"
             ) from ex
 
+        except Exception as ex:
+            raise MigrationError(message=f"Unexpected error: {ex}") from ex
+
         self.messages.notice(
             f"Connected to GitLab project: {self.gl_project.name_with_namespace} "
             f"(ID: {self.gl_project.id}) as {self._gl.user.username}"  # type: ignore
@@ -222,6 +232,9 @@ class Migrator:
             raise MigrationError(
                 f"GitHub repo not found: {self.github_repo_name}"
             ) from ex
+
+        except Exception as ex:
+            raise MigrationError(message=f"Unexpected error: {ex}") from ex
 
         self.messages.notice(
             f"Connected to GitHub repo: {self.gh_repo.name} (ID: {self.gh_repo.id}) "
