@@ -115,7 +115,7 @@ def _define_args() -> configargparse.ArgumentParser:
         "--user-mapping",
         type=yaml.safe_load,
         default={},
-        help='Define mapping of gitlab to github usernames in YAML. e.g. "{ErikKalkoken: ErikKalkoken}"',
+        help="Mapping of GitLab to GitHub usernames in YAML.",
     )
     parser.add_argument(
         "--vercel-blob-token",

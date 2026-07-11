@@ -1,7 +1,6 @@
 gitlab-token: glpat-my-token
 github-token: ghp_my_token
 vercel-blob-token: vercel_blob_rw_my-token
-user-mapping: {
-        erik1: erik_1,
-        john1: john_2
-    }
+user-mapping:
+  erik_gitlab: erik_github
+  john_1: john_2

@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Set
 import gitlab
 import requests
 import vercel_blob
+import yaml
 from diskcache import Cache
 from github import Auth, Github
 from github.GithubException import (
@@ -293,7 +294,7 @@ class Migrator:
                 pb.advance(task)
 
         if ok_all:
-            self.messages.notice("User mappings loaded")
+            self.messages.notice(f"{len(user_mapping)} user mappings loaded")
 
         return ok_all
 
@@ -324,6 +325,8 @@ class Migrator:
         if not self._unknown_users:
             return
 
+        invalids = []
+        valids = []
         with progress.Progress(
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
@@ -334,18 +337,24 @@ class Migrator:
             console=self.console,
         ) as pb:
             task = pb.add_task(
-                "Finding github users", total=len(self._unknown_users), current=""
+                "Finding user mappings", total=len(self._unknown_users), current=""
             )
             for username in self._unknown_users:
                 pb.update(task, current=username)
-                if not self._github_user_exists(username):
-                    self.messages.error(f"No mapping found: {username}", pb.console)
+                if self._github_user_exists(username):
+                    valids.append(username)
                 else:
-                    self.messages.success(
-                        f"Found mapping: {username}: {username},", pb.console
-                    )
+                    invalids.append(username)
 
                 pb.advance(task)
+
+        if valids:
+            mappings = yaml.dump({"user-mapping": {x: x for x in valids}})
+            self.messages.success(f"Found {len(valids)} mappings:\n{mappings}")
+
+        if invalids:
+            out_str = ", ".join(sorted(invalids))
+            self.messages.warning(f"No mapping found: {out_str}")
 
     def sync_labels(self):
         """Check for missing labels in GitHub repo and add them when missing."""
