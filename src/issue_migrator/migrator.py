@@ -247,25 +247,13 @@ class Migrator:
                 current = f"{gl_username} -> {gh_username}"
                 pb.update(task, current=current)
 
-                # gitlab user
-                gl_users = self.gl.users.list(username=gl_username, get_all=True)
-                if len(gl_users) == 0:
+                if not self._gitlab_user_exists(gl_username):
                     ok = False
                     self.messages.error(
                         f"Unknown GitLab username: {gl_username}", pb.console
                     )
 
-                # github user
-                query = f"user:{gh_username}"
-                try:
-                    result = self.gh.search_users(query)
-                    if result.totalCount == 0:
-                        ok = False
-                        self.messages.error(
-                            f"Unknown GitHub username: {gh_username}", pb.console
-                        )
-
-                except GithubException:
+                if not self._github_user_exists(gh_username):
                     ok = False
                     self.messages.error(
                         f"Unknown GitHub username: {gh_username}", pb.console
@@ -277,6 +265,50 @@ class Migrator:
             self.messages.success("user mapping are valid")
 
         return ok
+
+    def _gitlab_user_exists(self, gl_username) -> bool:
+        gl_users = self.gl.users.list(username=gl_username, get_all=True)
+        if len(gl_users) == 0:
+            return False
+
+        return True
+
+    def _github_user_exists(self, gh_username) -> bool:
+        query = f"user:{gh_username}"
+        try:
+            result = self.gh.search_users(query)
+            if result.totalCount == 0:
+                return False
+
+        except GithubException:
+            return False
+
+        return True
+
+    def find_github_users(self):
+        if not self._unknown_users:
+            return
+
+        with progress.Progress(
+            progress.SpinnerColumn(),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.MofNCompleteColumn(),
+            progress.TextColumn("{task.fields[current]}"),
+            transient=True,
+            console=self.console,
+        ) as pb:
+            task = pb.add_task(
+                "Finding github users", total=len(self._unknown_users), current=""
+            )
+            for username in self._unknown_users:
+                pb.update(task, current=username)
+                if not self._github_user_exists(username):
+                    self.messages.error(f"Not a username: {username}", pb.console)
+                else:
+                    self.messages.success(f"Found username: {username}", pb.console)
+
+                pb.advance(task)
 
     def sync_labels(self):
         """Check for missing labels in GitHub repo and add them when missing."""

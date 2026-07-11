@@ -5,6 +5,7 @@ import sys
 
 import configargparse
 import yaml
+import yaml.parser
 from rich.console import Console
 
 from issue_migrator.migrator import MigrationError, Migrator
@@ -68,6 +69,12 @@ def _define_args() -> configargparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--find-users",
+        action="store_true",
+        help="When set will try to find unknown users on GitHub",
+    )
+
+    parser.add_argument(
         "--no-close-issues",
         action="store_true",
         help="Disables closing migrated issues.",
@@ -124,7 +131,11 @@ def _define_args() -> configargparse.ArgumentParser:
 def main_cli():
     """Main program for running this script."""
     parser = _define_args()
-    options = parser.parse_args()
+    try:
+        options = parser.parse_args()
+    except yaml.MarkedYAMLError as ex:
+        print(f"Configuration error: {ex}")
+        sys.exit(1)
 
     if options.show_config:
         print(options)
@@ -181,6 +192,9 @@ def main_cli():
                     issue_ids=options.issue_id,
                     no_close_issues=options.no_close_issues,
                 )
+
+            if options.find_users:
+                m.find_github_users()
 
         except KeyboardInterrupt:
             messages.critical("Aborted by user")
