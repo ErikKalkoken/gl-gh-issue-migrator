@@ -25,8 +25,10 @@ def make_migrator_params(**kwargs) -> dict:
     params = {
         "cache": mock.MagicMock(spec=Cache),
         "console": Console(quiet=True),
+        "github_app_id": "1234567",
+        "github_installation_id": 1234567,
+        "github_private_key": "private-key",
         "github_repo_name": "ErikKalkoken/github-repo",
-        "github_token": "github_token",
         "gitlab_host": GITLAB_PUBLIC_HOST,
         "gitlab_repo_name": "ErikKalkoken/gitlab-repo",
         "gitlab_token": "gitlab_token",

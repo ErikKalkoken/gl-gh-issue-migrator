@@ -345,6 +345,7 @@ class Migrator:
         Will try to find users on GitHub with the same username as on GitLab.
         """
         if not self._unknown_users:
+            self.messages.notice("No unknown users")
             return
 
         invalids = []
@@ -437,9 +438,9 @@ class Migrator:
             state="opened",
             order_by="created_at",
             sort="asc",
-            iterator=True,
+            get_all=True,
         )
-        total = issues.total
+        total = len(issues)
         if not total:
             self.messages.info("Found no issues to migrate")
             return
@@ -569,7 +570,7 @@ class Migrator:
         else:
             gh_issue = None
 
-        notes = gl_issue.notes.list(iterator=True, sort="asc")
+        notes = gl_issue.notes.list(get_all=True, sort="asc")
         for gl_note in notes:
             if gl_note.system:
                 continue
