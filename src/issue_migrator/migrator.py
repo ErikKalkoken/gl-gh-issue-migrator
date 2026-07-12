@@ -21,7 +21,7 @@ from github.GithubException import (
 )
 from github.Issue import Issue
 from github.Repository import Repository
-from gitlab.exceptions import GitlabAuthenticationError, GitlabGetError
+from gitlab.exceptions import GitlabAuthenticationError, GitlabError, GitlabGetError
 from gitlab.v4.objects import Project, ProjectIssue, ProjectIssueNote
 from rich import progress
 from rich.console import Console
@@ -112,8 +112,10 @@ class Migrator:
 
     def __init__(
         self,
+        github_app_id: str,
+        github_installation_id: int,
+        github_private_key: str,
         github_repo_name: str,
-        github_token: str,
         gitlab_host: str,
         gitlab_repo_name: str,
         gitlab_token: str,
@@ -124,8 +126,10 @@ class Migrator:
         console: Optional[Console] = None,
     ):
         self.console = console or Console()
+        self.github_app_id = github_app_id
+        self.github_installation_id = github_installation_id
+        self.github_private_key = github_private_key
         self.github_repo_name = github_repo_name
-        self.github_token = github_token
         self.gitlab_host = gitlab_host
         self.gitlab_repo_name = gitlab_repo_name
         self.gitlab_token = gitlab_token
@@ -211,7 +215,7 @@ class Migrator:
                 message=f"GitLab project not found: {self.gitlab_repo_name}"
             ) from ex
 
-        except Exception as ex:
+        except (GitlabError, ConnectionError) as ex:
             raise MigrationError(message=f"Unexpected error: {ex}") from ex
 
         self.messages.notice(
@@ -220,14 +224,9 @@ class Migrator:
         )
 
         try:
-            auth = Auth.Token(self.github_token)
-            self._gh = Github(  # config to reduce hitting rate limits
-                auth=auth,
-                per_page=100,
-                seconds_between_requests=0.25,
-                seconds_between_writes=1.0,
-            )
-            gh_user = self._gh.get_user()
+            app_auth = Auth.AppAuth(self.github_app_id, self.github_private_key)
+            auth = app_auth.get_installation_auth(self.github_installation_id)
+            self._gh = Github(auth=auth)
             self._gh_repo = self._gh.get_repo(self.github_repo_name)
 
         except BadCredentialsException as ex:
@@ -238,12 +237,11 @@ class Migrator:
                 f"GitHub repo not found: {self.github_repo_name}"
             ) from ex
 
-        except Exception as ex:
+        except (GithubException, ConnectionError) as ex:
             raise MigrationError(message=f"Unexpected error: {ex}") from ex
 
         self.messages.notice(
             f"Connected to GitHub repo: {self.gh_repo.name} (ID: {self.gh_repo.id}) "
-            f"as {gh_user.login}"
         )
 
     def close(self):
@@ -334,8 +332,10 @@ class Migrator:
             if result.totalCount == 0:
                 return False
 
-        except GithubException:
-            return False
+        except GithubException as ex:
+            if ex.status == 422:  # Validation error
+                return False
+            raise ex
 
         return True
 
@@ -439,7 +439,8 @@ class Migrator:
             sort="asc",
             iterator=True,
         )
-        if not issues.total:
+        total = issues.total
+        if not total:
             self.messages.info("Found no issues to migrate")
             return
 
@@ -447,7 +448,7 @@ class Migrator:
         skipped_count = 0
         failed_count = 0
 
-        self.messages.info(f"Found {issues.total} opened issue to migrate")
+        self.messages.info(f"Found {total} opened issue to migrate")
         with progress.Progress(
             progress.SpinnerColumn(),
             progress.TextColumn("[progress.description]{task.description}"),
@@ -457,7 +458,7 @@ class Migrator:
             transient=True,
             console=self.console,
         ) as pb:
-            task = pb.add_task("Migrating issues", total=issues.total, current="")
+            task = pb.add_task("Migrating issues", total=total, current="")
             for gl_issue in issues:
                 current = f"#{gl_issue.encoded_id}: {gl_issue.title}"
                 pb.update(task, current=current)
@@ -482,12 +483,10 @@ class Migrator:
                         continue
 
                     self._migrate_issue(
-                        gl_issue=gl_issue,
-                        pb=pb,
-                        no_close_issues=no_close_issues,
+                        gl_issue=gl_issue, pb=pb, no_close_issues=no_close_issues
                     )
 
-                except Exception as ex:
+                except (GithubException, GitlabError) as ex:
                     failed_count += 1
                     self.messages.error(
                         f"Failed to migrate issue {_issue_str(gl_issue)}: {ex}",
@@ -499,8 +498,9 @@ class Migrator:
                 migrated_count += 1
                 pb.advance(task)
 
+        total_2 = migrated_count + skipped_count + failed_count
         self.messages.info(
-            f"Finished processing {issues.total} issues: {migrated_count} migrated, "
+            f"Finished processing {total_2} issues: {migrated_count} migrated, "
             f"{skipped_count} skipped, {failed_count} failed."
         )
         if self._unknown_users:
@@ -576,7 +576,7 @@ class Migrator:
 
             try:
                 self._migrate_note(gl_issue, gh_issue, gl_note)
-            except Exception as ex:
+            except (GithubException, GitlabError) as ex:
                 self.messages.error(
                     f"Failed to migrate note #{gl_note.get_id()} "
                     f"for issue {_issue_str(gl_issue)}: {ex}",

@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 import configargparse
 import yaml
@@ -58,10 +59,22 @@ def _define_args() -> configargparse.ArgumentParser:
         help="Personal access token for GitLab.",
     )
     parser.add_argument(
-        "--github-token",
-        env_var="GITHUB_TOKEN",
+        "--github-app-id",
+        env_var="GITHUB_APP_ID",
         required=True,
-        help="Personal access token for GitHub.",
+        help="App ID of the GitHub app.",
+    )
+    parser.add_argument(
+        "--github-installation-id",
+        env_var="GITHUB_INSTALLATION_ID",
+        type=int,
+        required=True,
+        help="Installation ID of the GitHub app.",
+    )
+    parser.add_argument(
+        "--github-private-key",
+        required=True,
+        help="Path to pem file containing the private key",
     )
     parser.add_argument(
         "--issue-id",
@@ -153,11 +166,21 @@ def main_cli():
     )
     # messages.debug(f"Cache directory is {cache_directory}")
 
+    path = Path(options.github_private_key)
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            github_private_key = f.read()
+    except OSError as ex:
+        messages.critical(f"Failed to open private key file: {path}: {ex}")
+        sys.exit(1)
+
     with Migrator(
         cache_directory=cache_directory,
         console=console,
         github_repo_name=options.github_repo_name,
-        github_token=options.github_token,
+        github_app_id=options.github_app_id,
+        github_installation_id=options.github_installation_id,
+        github_private_key=github_private_key,
         gitlab_host=options.gitlab_host,
         gitlab_repo_name=options.gitlab_repo_name,
         gitlab_token=options.gitlab_token,

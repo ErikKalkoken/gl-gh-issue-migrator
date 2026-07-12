@@ -23,9 +23,20 @@ A tool for migrating issues from a GitHub project to a GitLab repo.
 
 ## How to use
 
-1. Create a bot user account on GitHub (optional but recommended)
-1. Create and store tokens for GitLab, GitHub and Vercel Blob in the config file
+### Prerequisites
+
+You need the following:
+
+- A personal access token for GitLab with the scopes: API.
+- A GitHub app with the scopes: Issues read/write
+- A pem file containing the private token of the GitHub app
+- A token for a vercel blob (for storing embedded files) with the scopes: read/write
+
+### Migration
+
 1. Import the GitLab project into GitHub via the official import feature on it's site
+1. Install your GitHub app into the imported repo
+1. Add the tokens to the config file
 1. Make a dry run to identify missing user mappings and potential issues
 
     ```sh

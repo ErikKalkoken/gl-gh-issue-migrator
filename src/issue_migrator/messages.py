@@ -11,6 +11,8 @@ class Messages:
     """A class for generating user messages with semantic colors on the console."""
 
     class Level(enum.IntEnum):
+        """The severity level of a message."""
+
         CRITICAL = 50
         DEBUG = 10
         ERROR = 40
@@ -114,5 +116,5 @@ class MessagesLogHandler(logging.Handler):
 
             self._messages.print(f"{record.name}: {record.msg}", level=level)
 
-        except Exception:
+        except Exception:  # pylint: disable=W0718
             self.handleError(record)
