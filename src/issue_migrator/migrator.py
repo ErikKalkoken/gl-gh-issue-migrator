@@ -35,6 +35,7 @@ MIGRATED_LABEL_DESCRIPTION = "This label was migrated from GitLab"
 LOG_LEVEL = "WARN"
 LOG_FORMAT = "%(message)s"
 LOG_DATEFMT = "[%X]"
+HANDLE_BLACKLIST = {"channel", "here", "everyone", "all"}
 
 GITHUB_LABEL_COLORS = [  # spell-checker: disable
     # Reds & Pinks
@@ -690,21 +691,24 @@ class Migrator:
                 return match.group(0)
 
             # Group 3 matched the user mention
-            gl_username = match.group(3)
+            handle = match.group(3)
 
             # Gitlab usernames cannot end in standard punctuation.
             # If a trailing period/comma/exclamation was caught, separate it.
             trailing_punctuation = ""
-            while gl_username and gl_username[-1] in ".,!?":
-                trailing_punctuation = gl_username[-1] + trailing_punctuation
-                gl_username = gl_username[:-1]
+            while handle and handle[-1] in ".,!?":
+                trailing_punctuation = handle[-1] + trailing_punctuation
+                handle = handle[:-1]
+
+            handle = str(handle)
 
             try:
-                gh_username = self.user_mapping[gl_username]
+                gh_username = self.user_mapping[handle]
                 mention = f"@{gh_username}"
             except KeyError:
-                mention = "@\u200b" + gl_username  # disables the mention
-                self._unknown_users.add(gl_username)
+                mention = "@\u200b" + handle  # disables the mention
+                if handle.lower() not in HANDLE_BLACKLIST:
+                    self._unknown_users.add(handle)
 
             return f"{mention}{trailing_punctuation}"
 

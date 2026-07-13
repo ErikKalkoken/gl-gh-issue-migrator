@@ -340,3 +340,19 @@ class TestMigrateMentions(unittest.TestCase):
                 # then
                 want = "Hello @alice2, welcome!"
                 self.assertEqual(got, want)
+
+    def test_should_add_unknown_users_to_list(self):
+        # given
+        with tempfile.TemporaryDirectory() as temp_dir_str:
+            params = make_migrator_params(cache_directory=temp_dir_str)
+            with Migrator(**params) as m:
+                m.user_mapping["alice"] = "alice2"
+                input_text = (
+                    "Hello @alice and @bob! Hello @channel, @everyone, @here, @all"
+                )
+
+                # when
+                m._migrate_mentions(input_text)
+
+                # then
+                self.assertSetEqual(set(m._unknown_users), {"bob"})
