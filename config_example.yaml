@@ -1,6 +1,11 @@
 gitlab-token: glpat-my-token
-github-token: ghp_my_token
+
+github-app-id: 987654321
+github-installation-id: 12345678
+github-private-key: path/to/private-key.pem
+
 vercel-blob-token: vercel_blob_rw_my-token
+
 user-mapping:
   erik_gitlab: erik_github
   john_1: john_2
