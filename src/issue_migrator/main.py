@@ -86,9 +86,9 @@ def _define_args() -> configargparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--find-mappings",
+        "--find-users",
         action="store_true",
-        help="When set will try to find mappings for unknown users",
+        help="When set will try to find user mappings for unknown users",
     )
     parser.add_argument(
         "--no-close-issues",
@@ -202,6 +202,7 @@ def main_cli():
             messages.critical("Aborted by user")
             sys.exit(1)
 
+        ok = True
         try:
             if not m.load_user_mappings(dict(options.user_mapping)):
                 messages.critical("Some user mappings are invalid")
@@ -215,12 +216,12 @@ def main_cli():
             if options.no_migration:
                 messages.notice("Skipped migration as requested")
             else:
-                m.migrate_issues(
+                ok |= m.migrate_issues(
                     issue_ids=options.issue_id,
                     no_close_issues=options.no_close_issues,
                 )
 
-            if options.find_mappings:
+            if options.find_users:
                 m.find_user_mappings()
 
         except KeyboardInterrupt:
@@ -231,10 +232,10 @@ def main_cli():
             messages.critical(ex.message)
             sys.exit(1)
 
-        if m.is_dry_run:
-            messages.success("Dry Run completed!")
-        else:
-            messages.success("Migration completed!")
+        topic = "Dry Run" if m.is_dry_run else "Migration"
+        result = "successfully" if ok else "with issues"
+        level = messages.Level.SUCCESS if ok else messages.Level.WARNING
+        messages.print(f"{topic} completed {result}", level=level)
 
 
 if __name__ == "__main__":

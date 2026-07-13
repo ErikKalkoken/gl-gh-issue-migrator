@@ -430,8 +430,8 @@ class Migrator:
         self,
         issue_ids: Optional[List[int]] = None,
         no_close_issues: bool = False,
-    ):
-        """Migrate all issues of a project."""
+    ) -> bool:
+        """Migrate all issues of a project and reports whether it was successful."""
 
         _issue_ids = set(issue_ids or [])
         issues = self.gl_project.issues.list(
@@ -443,7 +443,7 @@ class Migrator:
         total = len(issues)
         if not total:
             self.messages.info("Found no issues to migrate")
-            return
+            return True
 
         migrated_count = 0
         skipped_count = 0
@@ -506,8 +506,10 @@ class Migrator:
         )
         if self._unknown_users:
             self.messages.warning(
-                f"Unkown users: {', '.join(sorted(self._unknown_users))}"
+                f"Found unkown users: {', '.join(sorted(self._unknown_users))}"
             )
+
+        return failed_count == 0
 
     def _issue_exists(self, gl_issue: ProjectIssue) -> bool:
         """Report whether an GitLab issue exists on GitHub."""
